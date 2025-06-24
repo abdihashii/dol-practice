@@ -1,0 +1,14 @@
+{
+  "name": "dol-practice",
+  "version": "0.0.1",
+  "description": "Dol Practice",
+  "scripts": {},
+  "keywords": [],
+  "author": "Abdirahman Haji <abdirahman.haji.13@gmail.com>",
+  "license": "ISC",
+  "packageManager": "pnpm@10.10.0",
+  "devDependencies": {
+    "prettier": "^3.6.0",
+    "typescript": "^5.8.3"
+  }
+}

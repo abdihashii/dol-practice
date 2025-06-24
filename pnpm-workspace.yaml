@@ -1,0 +1,4 @@
+packages:
+  - "rust-services/*"
+  - "ts-services/apps/*"
+  - "ts-services/packages/*"
