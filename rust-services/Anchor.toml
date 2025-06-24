@@ -5,14 +5,17 @@ package_manager = "pnpm"
 resolution = true
 skip-lint = false
 
+[programs.Devnet]
+dol_program = "89oT3JtfnGATv6hTyzt3fD3y95JNrmEzDRRMYrJ8X53R"
+
 [programs.localnet]
-dol_program = "55wZTBRpDdCt5tEz9dpsKgwmrATUZc6v2237cXQkTgX"
+dol_program = "89oT3JtfnGATv6hTyzt3fD3y95JNrmEzDRRMYrJ8X53R"
 
 [registry]
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "localnet"
+cluster = "Devnet"
 wallet = "~/.config/solana/A1.json"
 
 [scripts]

@@ -1,0 +1,16 @@
+{
+  "name": "@dol-practice/ts-client",
+  "version": "0.0.1",
+  "description": "Dol Practice - TS Client",
+  "scripts": {
+    "start": "tsx index.ts",
+    "dev": "tsx watch index.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@10.10.0",
+  "dependencies": {
+    "tsx": "^4.20.3"
+  }
+}
