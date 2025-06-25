@@ -251,7 +251,7 @@ describe("dol-program", () => {
 
       expect.fail("Should have failed with unauthorized access");
     } catch (error) {
-      expect(error.message).to.include("AnchorError");
+      expect(error.message).to.include("ConstraintHasOne");
     }
   });
 
