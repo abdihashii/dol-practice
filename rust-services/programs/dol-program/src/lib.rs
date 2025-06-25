@@ -9,7 +9,7 @@ pub mod dol_program {
     use super::*;
 
     pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
-        let counter = &mut ctx.accounts.counter;
+        let counter: &mut Account<'_, Counter> = &mut ctx.accounts.counter;
         counter.authority = ctx.accounts.user.key();
         counter.count = 0;
         counter.bump = ctx.bumps.counter;
@@ -18,14 +18,14 @@ pub mod dol_program {
     }
 
     pub fn increment(ctx: Context<Update>) -> Result<()> {
-        let counter = &mut ctx.accounts.counter;
+        let counter: &mut Account<'_, Counter> = &mut ctx.accounts.counter;
         counter.count = counter.count.checked_add(1).unwrap();
         msg!("Counter incremented to: {}", counter.count);
         Ok(())
     }
 
     pub fn get_count(ctx: Context<View>) -> Result<()> {
-        let counter = &ctx.accounts.counter;
+        let counter: &Account<'_, Counter> = &ctx.accounts.counter;
         msg!("Current count: {}", counter.count);
         Ok(())
     }
