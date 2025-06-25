@@ -539,6 +539,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "dol-program"
+version = "0.1.0"
+dependencies = [
+ "anchor-lang",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
