@@ -6,10 +6,10 @@ resolution = true
 skip-lint = false
 
 [programs.Devnet]
-dol_program = "89oT3JtfnGATv6hTyzt3fD3y95JNrmEzDRRMYrJ8X53R"
+counter_program = "89oT3JtfnGATv6hTyzt3fD3y95JNrmEzDRRMYrJ8X53R"
 
 [programs.localnet]
-dol_program = "89oT3JtfnGATv6hTyzt3fD3y95JNrmEzDRRMYrJ8X53R"
+counter_program = "89oT3JtfnGATv6hTyzt3fD3y95JNrmEzDRRMYrJ8X53R"
 
 [registry]
 url = "https://api.apr.dev"

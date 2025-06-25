@@ -5,7 +5,7 @@ declare_id!("89oT3JtfnGATv6hTyzt3fD3y95JNrmEzDRRMYrJ8X53R");
 pub const ANCHOR_DISCRIMINATOR: usize = 8;
 
 #[program]
-pub mod dol_program {
+pub mod counter_program {
     use super::*;
 
     pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
