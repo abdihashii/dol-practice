@@ -39,7 +39,7 @@ async function loadKeypair(keypairPath: string): Promise<Keypair> {
 }
 
 function deserializeCounter(data: Buffer): CounterData {
-  if (data.length < 48) {
+  if (data.length < 49) {
     throw new Error("Invalid counter data length");
   }
 
@@ -47,6 +47,14 @@ function deserializeCounter(data: Buffer): CounterData {
   const count = data.readBigUInt64LE(40);
 
   return { authority, count };
+}
+
+function getCounterPDA(userPublicKey: PublicKey): PublicKey {
+  const [counterPDA] = PublicKey.findProgramAddressSync(
+    [Buffer.from("counter"), userPublicKey.toBuffer()],
+    PROGRAM_ID
+  );
+  return counterPDA;
 }
 
 function parseCounterAddress(
@@ -82,21 +90,19 @@ function showUsage(): void {
   console.log("");
   console.log("Available commands:");
   console.log("  initialize --keypair <path> - Create a new counter");
-  console.log(
-    "  increment <counter_address> --keypair <path> - Increment the counter"
-  );
+  console.log("  increment --keypair <path> - Increment your counter");
   console.log(
     "  get <counter_address> - Get counter value (no keypair needed)"
   );
+  console.log("  my-counter --keypair <path> - Get your counter PDA and value");
 }
 
 function showCommands(): void {
   console.log("Available commands:");
   console.log("  initialize --keypair <path> - Create a new counter");
-  console.log(
-    "  increment <counter_address> --keypair <path> - Increment the counter"
-  );
+  console.log("  increment --keypair <path> - Increment your counter");
   console.log("  get <counter_address> - Get counter value");
+  console.log("  my-counter --keypair <path> - Get your counter PDA and value");
 }
 
 // =============================================================================
@@ -112,7 +118,7 @@ function createInitializeInstruction(
 
   return new TransactionInstruction({
     keys: [
-      { pubkey: counter, isSigner: true, isWritable: true },
+      { pubkey: counter, isSigner: false, isWritable: true },
       { pubkey: user, isSigner: true, isWritable: true },
       { pubkey: systemProgram, isSigner: false, isWritable: false },
     ],
@@ -143,13 +149,14 @@ function createIncrementInstruction(
 
 async function initializeCounter(
   connection: Connection,
-  payer: Keypair,
-  counterKeypair: Keypair
+  payer: Keypair
 ): Promise<void> {
   console.log("🚀 Initializing counter...");
 
+  const counterPDA = getCounterPDA(payer.publicKey);
+
   const instruction = createInitializeInstruction(
-    counterKeypair.publicKey,
+    counterPDA,
     payer.publicKey
   );
 
@@ -158,11 +165,10 @@ async function initializeCounter(
   try {
     const signature = await sendAndConfirmTransaction(connection, transaction, [
       payer,
-      counterKeypair,
     ]);
 
     console.log("✅ Counter initialized!");
-    console.log("📍 Counter address:", counterKeypair.publicKey.toBase58());
+    console.log("📍 Counter address:", counterPDA.toBase58());
     console.log("🔗 Transaction signature:", signature);
   } catch (error) {
     console.error("Failed to initialize counter:", error);
@@ -230,14 +236,12 @@ async function handleCommand(
 ): Promise<void> {
   switch (command) {
     case "initialize":
-      const counterKeypair = Keypair.generate();
-      await initializeCounter(connection, payer, counterKeypair);
+      await initializeCounter(connection, payer);
       break;
 
     case "increment":
-      const counterAddress = parseCounterAddress(args, "increment");
-      if (!counterAddress) return;
-      await incrementCounter(connection, payer, counterAddress);
+      const incrementPDA = getCounterPDA(payer.publicKey);
+      await incrementCounter(connection, payer, incrementPDA);
       break;
 
     case "get":
@@ -245,6 +249,13 @@ async function handleCommand(
       if (!getAddress) return;
       await getCounter(connection, getAddress);
       break;
+
+    case "my-counter":
+      const myCounterPDA = getCounterPDA(payer.publicKey);
+      console.log("📍 Your counter PDA:", myCounterPDA.toBase58());
+      await getCounter(connection, myCounterPDA);
+      break;
+
 
     default:
       showCommands();
@@ -258,15 +269,24 @@ async function handleCommand(
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const command = args[0];
-  const keypairIndex = args.indexOf("--keypair");
+  const connection = new Connection(clusterApiUrl("devnet"), "confirmed");
 
+  // Handle 'get' command separately as it doesn't need a keypair
+  if (command === "get") {
+    const getAddress = parseCounterAddress(args, "get");
+    if (!getAddress) return;
+    await getCounter(connection, getAddress);
+    return;
+  }
+
+  // For other commands, require keypair
+  const keypairIndex = args.indexOf("--keypair");
   if (keypairIndex === -1 || !args[keypairIndex + 1]) {
     showUsage();
     return;
   }
 
   const keypairPath = args[keypairIndex + 1];
-  const connection = new Connection(clusterApiUrl("devnet"), "confirmed");
 
   try {
     const payer = await loadKeypair(keypairPath);
