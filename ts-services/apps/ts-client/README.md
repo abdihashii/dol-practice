@@ -10,7 +10,7 @@ A TypeScript client for interacting with the DOL Program deployed on Solana devn
 
 ## Usage
 
-⚠️ **Important**: A keypair file is **required** for all account creation operations (`initialize` and `increment` commands).
+⚠️ **Important**: A keypair file is **required** for all operations except `get` (initialize, increment, my-counter commands).
 
 ### Show Help
 
@@ -26,20 +26,20 @@ pnpm start initialize --keypair /path/to/your/keypair.json
 
 This will:
 
-- Create a new counter account
+- Create your unique counter PDA (Program Derived Address)
 - Set the caller as the authority
 - Initialize count to 0
-- Output the counter address for future operations
+- Output the counter PDA address
 
-### Increment a Counter
+### Increment Your Counter
 
 ```bash
-pnpm start increment <counter_address> --keypair /path/to/your/keypair.json
+pnpm start increment --keypair /path/to/your/keypair.json
 ```
 
 This will:
 
-- Increment the counter by 1
+- Increment your counter by 1
 - Output the transaction signature
 
 ### Get Counter Value
@@ -54,13 +54,26 @@ This will display:
 - Authority (owner) public key
 - Current count value
 
+### Get Your Counter
+
+```bash
+pnpm start my-counter --keypair /path/to/your/keypair.json
+```
+
+This will:
+
+- Calculate your counter PDA address
+- Display the PDA address
+- Show your counter's current value
+
 ## Keypair Requirements
 
 ### Mandatory Keypair
 
-- **Initialize**: Requires `--keypair <path>` to create and fund new accounts
-- **Increment**: Requires `--keypair <path>` to sign transactions as the authority
+- **Initialize**: Requires `--keypair <path>` to create and fund new PDA accounts
+- **Increment**: Requires `--keypair <path>` to increment your counter
 - **Get**: No keypair needed (read-only operation)
+- **My Counter**: Requires `--keypair <path>` to derive your PDA address
 
 ### Keypair Format
 
@@ -72,29 +85,30 @@ The keypair file should be a JSON array of 64 numbers (the secret key bytes):
 
 ## Example Workflow
 
-1. **Initialize a counter:**
+1. **Initialize your counter:**
 
    ```bash
    pnpm start initialize --keypair /path/to/your/keypair.json
-   # Output: Counter address: 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU
+   # Output: Counter address: <your-unique-PDA-address>
    ```
 
-2. **Check initial value:**
+2. **Check your counter:**
 
    ```bash
-   pnpm start get 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU
+   pnpm start my-counter --keypair /path/to/your/keypair.json
+   # Output: Your counter PDA: <your-PDA-address>
    # Output: Count: 0
    ```
 
-3. **Increment the counter:**
+3. **Increment your counter:**
 
    ```bash
-   pnpm start increment 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU --keypair /path/to/your/keypair.json
+   pnpm start increment --keypair /path/to/your/keypair.json
    ```
 
 4. **Check updated value:**
    ```bash
-   pnpm start get 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU
+   pnpm start my-counter --keypair /path/to/your/keypair.json
    # Output: Count: 1
    ```
 
@@ -111,6 +125,16 @@ The Counter account stores:
 
 - `authority` (32 bytes): Public key of the counter owner
 - `count` (8 bytes): 64-bit unsigned integer counter value
+- `bump` (1 byte): PDA bump seed for address derivation
+
+### PDA (Program Derived Address)
+
+Each user gets exactly one counter account with an address derived from:
+- Program ID
+- Seed: `"counter"`
+- User's public key
+
+This ensures deterministic, unique counter addresses per user.
 
 ### Security
 
