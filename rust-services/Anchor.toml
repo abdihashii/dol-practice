@@ -17,7 +17,7 @@ dol_program = "DoLotrsAZR2JYa4tjue2c5q4EYKMbm6kxcrvjbU5cxX5"
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "Devnet"
+cluster = "Localnet"
 wallet = "~/.config/solana/A1.json"
 
 [scripts]
