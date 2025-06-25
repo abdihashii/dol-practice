@@ -6,3 +6,5 @@ export interface CounterData {
 }
 
 export type CommandArgs = string[];
+
+export type InstructionName = "initialize" | "increment" | "decrement";
