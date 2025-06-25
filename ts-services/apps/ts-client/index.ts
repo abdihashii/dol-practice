@@ -17,6 +17,14 @@ import {
   showUsage,
 } from "./lib/utils";
 
+/**
+ * Initializes a new counter account for the given payer.
+ * Automatically derives the counter PDA from the payer's public key and creates the account
+ * with the payer as the authority. Logs the counter address and transaction signature on success.
+ * 
+ * @param connection - Solana RPC connection
+ * @param payer - Keypair that will pay for the transaction and become the counter authority
+ */
 async function initializeCounter(
   connection: Connection,
   payer: Keypair
@@ -46,6 +54,15 @@ async function initializeCounter(
   }
 }
 
+/**
+ * Increments the count value of a counter account by 1.
+ * Only the authority (owner) of the counter can perform this operation.
+ * Logs success message and transaction signature on completion, or error on failure.
+ * 
+ * @param connection - Solana RPC connection
+ * @param payer - Keypair of the counter authority (must be the counter owner)
+ * @param counterAddress - Public key of the counter account to increment
+ */
 async function incrementCounter(
   connection: Connection,
   payer: Keypair,
@@ -72,6 +89,15 @@ async function incrementCounter(
   }
 }
 
+/**
+ * Decrements the count value of a counter account by 1.
+ * Only the authority (owner) of the counter can perform this operation.
+ * Logs success message and transaction signature on completion, or error on failure.
+ * 
+ * @param connection - Solana RPC connection
+ * @param payer - Keypair of the counter authority (must be the counter owner)
+ * @param counterAddress - Public key of the counter account to decrement
+ */
 async function decrementCounter(
   connection: Connection,
   payer: Keypair,
@@ -98,6 +124,14 @@ async function decrementCounter(
   }
 }
 
+/**
+ * Retrieves and displays the current state of a counter account.
+ * This is a read-only operation that anyone can perform. Displays the counter address,
+ * authority, and current count value. Shows "Counter not found" message if account doesn't exist.
+ * 
+ * @param connection - Solana RPC connection
+ * @param counterAddress - Public key of the counter account to read
+ */
 async function getCounter(
   connection: Connection,
   counterAddress: PublicKey
@@ -122,6 +156,16 @@ async function getCounter(
   }
 }
 
+/**
+ * Handles the execution of CLI commands by routing to appropriate handler functions.
+ * Supports initialize, increment, decrement, get, and my-counter commands.
+ * For increment/decrement, automatically derives the payer's counter PDA.
+ * 
+ * @param command - The command string to execute ("initialize" | "increment" | "decrement" | "get" | "my-counter")
+ * @param args - Command line arguments array (used for parsing counter address in 'get' command)
+ * @param connection - Solana RPC connection
+ * @param payer - Keypair for signing transactions and PDA derivation
+ */
 async function handleCommand(
   command: string,
   args: CommandArgs,
