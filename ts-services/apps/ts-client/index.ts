@@ -4,79 +4,18 @@ import {
   Keypair,
   PublicKey,
   sendAndConfirmTransaction,
-  SystemProgram,
   Transaction,
-  TransactionInstruction,
 } from "@solana/web3.js";
-import { PROGRAM_ID } from "./lib/constants";
+import { createCounterInstruction } from "./lib/instructions";
 import type { CommandArgs } from "./lib/types";
 import {
   deserializeCounter,
   getCounterPDA,
-  getInstructionDiscriminator,
   loadKeypair,
   parseCounterAddress,
   showCommands,
   showUsage,
 } from "./lib/utils";
-
-// =============================================================================
-// Instruction Builders
-// =============================================================================
-
-function createInitializeInstruction(
-  counter: PublicKey,
-  user: PublicKey,
-  systemProgram: PublicKey = SystemProgram.programId
-): TransactionInstruction {
-  const discriminator = getInstructionDiscriminator("initialize");
-
-  return new TransactionInstruction({
-    keys: [
-      { pubkey: counter, isSigner: false, isWritable: true },
-      { pubkey: user, isSigner: true, isWritable: true },
-      { pubkey: systemProgram, isSigner: false, isWritable: false },
-    ],
-    programId: PROGRAM_ID,
-    data: discriminator,
-  });
-}
-
-function createIncrementInstruction(
-  counter: PublicKey,
-  authority: PublicKey
-): TransactionInstruction {
-  const discriminator = getInstructionDiscriminator("increment");
-
-  return new TransactionInstruction({
-    keys: [
-      { pubkey: counter, isSigner: false, isWritable: true },
-      { pubkey: authority, isSigner: true, isWritable: false },
-    ],
-    programId: PROGRAM_ID,
-    data: discriminator,
-  });
-}
-
-function createDecrementInstruction(
-  counter: PublicKey,
-  authority: PublicKey
-): TransactionInstruction {
-  const discriminator = getInstructionDiscriminator("decrement");
-
-  return new TransactionInstruction({
-    keys: [
-      { pubkey: counter, isSigner: false, isWritable: true },
-      { pubkey: authority, isSigner: true, isWritable: false },
-    ],
-    programId: PROGRAM_ID,
-    data: discriminator,
-  });
-}
-
-// =============================================================================
-// Business Logic Functions
-// =============================================================================
 
 async function initializeCounter(
   connection: Connection,
@@ -86,7 +25,11 @@ async function initializeCounter(
 
   const counterPDA = getCounterPDA(payer.publicKey);
 
-  const instruction = createInitializeInstruction(counterPDA, payer.publicKey);
+  const instruction = createCounterInstruction(
+    "initialize",
+    counterPDA,
+    payer.publicKey
+  );
 
   const transaction = new Transaction().add(instruction);
 
@@ -110,7 +53,8 @@ async function incrementCounter(
 ): Promise<void> {
   console.log("⬆️ Incrementing counter...");
 
-  const instruction = createIncrementInstruction(
+  const instruction = createCounterInstruction(
+    "increment",
     counterAddress,
     payer.publicKey
   );
@@ -135,7 +79,8 @@ async function decrementCounter(
 ): Promise<void> {
   console.log("⬇️ Decrementing counter...");
 
-  const instruction = createDecrementInstruction(
+  const instruction = createCounterInstruction(
+    "decrement",
     counterAddress,
     payer.publicKey
   );
@@ -177,10 +122,6 @@ async function getCounter(
   }
 }
 
-// =============================================================================
-// Command Handling
-// =============================================================================
-
 async function handleCommand(
   command: string,
   args: CommandArgs,
@@ -219,10 +160,6 @@ async function handleCommand(
   }
 }
 
-// =============================================================================
-// Main Function
-// =============================================================================
-
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const command = args[0];
@@ -254,9 +191,5 @@ async function main(): Promise<void> {
     console.error("Failed to load keypair:", error);
   }
 }
-
-// =============================================================================
-// Entry Point
-// =============================================================================
 
 main().catch(console.error);
