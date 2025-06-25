@@ -22,7 +22,7 @@ importers:
         specifier: ^5.8.3
         version: 5.8.3
 
-  ts-services/apps/ts-client:
+  ts-services/apps/counter-client:
     dependencies:
       tsx:
         specifier: ^4.20.3

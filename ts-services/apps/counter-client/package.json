@@ -1,7 +1,7 @@
 {
-  "name": "@dol-practice/ts-client",
+  "name": "@dol-practice/counter-client",
   "version": "0.0.1",
-  "description": "Dol Practice - TS Client",
+  "description": "Dol Practice - Counter Client",
   "scripts": {
     "start": "tsx index.ts",
     "dev": "tsx watch index.ts"
