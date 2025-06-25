@@ -10,7 +10,7 @@ A TypeScript client for interacting with the DOL Program deployed on Solana devn
 
 ## Usage
 
-⚠️ **Important**: A keypair file is **required** for all operations except `get` (initialize, increment, my-counter commands).
+⚠️ **Important**: A keypair file is **required** for all operations except `get` (initialize, increment, decrement, my-counter commands).
 
 ### Show Help
 
@@ -40,6 +40,17 @@ pnpm start increment --keypair /path/to/your/keypair.json
 This will:
 
 - Increment your counter by 1
+- Output the transaction signature
+
+### Decrement Your Counter
+
+```bash
+pnpm start decrement --keypair /path/to/your/keypair.json
+```
+
+This will:
+
+- Decrement your counter by 1
 - Output the transaction signature
 
 ### Get Counter Value
@@ -72,6 +83,7 @@ This will:
 
 - **Initialize**: Requires `--keypair <path>` to create and fund new PDA accounts
 - **Increment**: Requires `--keypair <path>` to increment your counter
+- **Decrement**: Requires `--keypair <path>` to decrement your counter
 - **Get**: No keypair needed (read-only operation)
 - **My Counter**: Requires `--keypair <path>` to derive your PDA address
 
@@ -107,9 +119,22 @@ The keypair file should be a JSON array of 64 numbers (the secret key bytes):
    ```
 
 4. **Check updated value:**
+
    ```bash
    pnpm start my-counter --keypair /path/to/your/keypair.json
    # Output: Count: 1
+   ```
+
+5. **Decrement your counter:**
+
+   ```bash
+   pnpm start decrement --keypair /path/to/your/keypair.json
+   ```
+
+6. **Check final value:**
+   ```bash
+   pnpm start my-counter --keypair /path/to/your/keypair.json
+   # Output: Count: 0
    ```
 
 ## Technical Details

@@ -24,6 +24,13 @@ pub mod dol_program {
         Ok(())
     }
 
+    pub fn decrement(ctx: Context<Update>) -> Result<()> {
+        let counter: &mut Account<'_, Counter> = &mut ctx.accounts.counter;
+        counter.count = counter.count.checked_sub(1).unwrap();
+        msg!("Counter decremented to: {}", counter.count);
+        Ok(())
+    }
+
     pub fn get_count(ctx: Context<View>) -> Result<()> {
         let counter: &Account<'_, Counter> = &ctx.accounts.counter;
         msg!("Current count: {}", counter.count);

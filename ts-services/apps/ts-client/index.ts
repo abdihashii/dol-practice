@@ -91,6 +91,7 @@ function showUsage(): void {
   console.log("Available commands:");
   console.log("  initialize --keypair <path> - Create a new counter");
   console.log("  increment --keypair <path> - Increment your counter");
+  console.log("  decrement --keypair <path> - Decrement your counter");
   console.log(
     "  get <counter_address> - Get counter value (no keypair needed)"
   );
@@ -101,6 +102,7 @@ function showCommands(): void {
   console.log("Available commands:");
   console.log("  initialize --keypair <path> - Create a new counter");
   console.log("  increment --keypair <path> - Increment your counter");
+  console.log("  decrement --keypair <path> - Decrement your counter");
   console.log("  get <counter_address> - Get counter value");
   console.log("  my-counter --keypair <path> - Get your counter PDA and value");
 }
@@ -114,6 +116,7 @@ function createInitializeInstruction(
   user: PublicKey,
   systemProgram: PublicKey = SystemProgram.programId
 ): TransactionInstruction {
+  // Instruction discriminator: first 8 bytes of SHA256("global:initialize")
   const discriminator = Buffer.from([175, 175, 109, 31, 13, 152, 155, 237]);
 
   return new TransactionInstruction({
@@ -131,7 +134,25 @@ function createIncrementInstruction(
   counter: PublicKey,
   authority: PublicKey
 ): TransactionInstruction {
+  // Instruction discriminator: first 8 bytes of SHA256("global:increment")
   const discriminator = Buffer.from([11, 18, 104, 9, 104, 174, 59, 33]);
+
+  return new TransactionInstruction({
+    keys: [
+      { pubkey: counter, isSigner: false, isWritable: true },
+      { pubkey: authority, isSigner: true, isWritable: false },
+    ],
+    programId: PROGRAM_ID,
+    data: discriminator,
+  });
+}
+
+function createDecrementInstruction(
+  counter: PublicKey,
+  authority: PublicKey
+): TransactionInstruction {
+  // Instruction discriminator: first 8 bytes of SHA256("global:decrement")
+  const discriminator = Buffer.from([106, 227, 168, 59, 248, 27, 150, 101]);
 
   return new TransactionInstruction({
     keys: [
@@ -155,10 +176,7 @@ async function initializeCounter(
 
   const counterPDA = getCounterPDA(payer.publicKey);
 
-  const instruction = createInitializeInstruction(
-    counterPDA,
-    payer.publicKey
-  );
+  const instruction = createInitializeInstruction(counterPDA, payer.publicKey);
 
   const transaction = new Transaction().add(instruction);
 
@@ -197,6 +215,31 @@ async function incrementCounter(
     console.log("🔗 Transaction signature:", signature);
   } catch (error) {
     console.error("Failed to increment counter:", error);
+  }
+}
+
+async function decrementCounter(
+  connection: Connection,
+  payer: Keypair,
+  counterAddress: PublicKey
+): Promise<void> {
+  console.log("⬇️ Decrementing counter...");
+
+  const instruction = createDecrementInstruction(
+    counterAddress,
+    payer.publicKey
+  );
+  const transaction = new Transaction().add(instruction);
+
+  try {
+    const signature = await sendAndConfirmTransaction(connection, transaction, [
+      payer,
+    ]);
+
+    console.log("✅ Counter decremented!");
+    console.log("🔗 Transaction signature:", signature);
+  } catch (error) {
+    console.error("Failed to decrement counter:", error);
   }
 }
 
@@ -244,6 +287,11 @@ async function handleCommand(
       await incrementCounter(connection, payer, incrementPDA);
       break;
 
+    case "decrement":
+      const decrementPDA = getCounterPDA(payer.publicKey);
+      await decrementCounter(connection, payer, decrementPDA);
+      break;
+
     case "get":
       const getAddress = parseCounterAddress(args, "get");
       if (!getAddress) return;
@@ -255,7 +303,6 @@ async function handleCommand(
       console.log("📍 Your counter PDA:", myCounterPDA.toBase58());
       await getCounter(connection, myCounterPDA);
       break;
-
 
     default:
       showCommands();
