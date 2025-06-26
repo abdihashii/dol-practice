@@ -12,20 +12,69 @@ declare_id!("DoLotrsAZR2JYa4tjue2c5q4EYKMbm6kxcrvjbU5cxX5");
 
 pub const ANCHOR_DISCRIMINATOR: usize = 8;
 
+// Super Admin public key
+pub const SUPER_ADMIN: &str = "AfuXGptXuHDGpnAL5V27fUkNkHTVcDPGgF1cGbmTena";
+
+// Role limits
+pub const MAX_ADMINS: usize = 3;
+pub const MAX_MODERATORS: usize = 5;
+pub const MAX_CURATORS: usize = 10;
+
+// Role checking helper functions
+impl DoLState {
+    pub fn is_super_admin(&self, user: &Pubkey) -> bool {
+        self.super_admin == *user
+    }
+
+    pub fn is_admin(&self, user: &Pubkey) -> bool {
+        self.admins.contains(user)
+    }
+
+    pub fn is_moderator(&self, user: &Pubkey) -> bool {
+        self.moderators.contains(user)
+    }
+
+    pub fn is_curator(&self, user: &Pubkey) -> bool {
+        self.curators.contains(user)
+    }
+
+    pub fn has_admin_privileges(&self, user: &Pubkey) -> bool {
+        self.is_super_admin(user) || self.is_admin(user)
+    }
+
+    pub fn can_add_books(&self, user: &Pubkey) -> bool {
+        self.is_super_admin(user) || self.is_admin(user) || self.is_curator(user)
+    }
+
+    pub fn can_manage_roles(&self, user: &Pubkey) -> bool {
+        self.is_super_admin(user) || self.is_admin(user)
+    }
+}
+
 #[program]
 pub mod dol_program {
     use super::*;
 
-    /// Initialize the DoL program with an admin authority
-    /// This sets up the global state and designates who can add books to the catalog
+    /// Initialize the DoL program with super admin authority (super admin only)
+    /// This sets up the global state with role-based access control
     pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
+        // Validate that signer is the hardcoded super admin
+        let super_admin_key = SUPER_ADMIN.parse::<Pubkey>().unwrap();
+        require!(
+            ctx.accounts.super_admin.key() == super_admin_key,
+            DoLError::NotSuperAdmin
+        );
+
         let dol_state: &mut Account<'_, DoLState> = &mut ctx.accounts.dol_state;
-        dol_state.admin = ctx.accounts.admin.key();
+        dol_state.super_admin = ctx.accounts.super_admin.key();
+        dol_state.admins = Vec::new();
+        dol_state.moderators = Vec::new();
+        dol_state.curators = Vec::new();
         dol_state.book_count = 0;
         dol_state.version = 1;
         dol_state.bump = ctx.bumps.dol_state;
         
-        msg!("DoL program initialized with admin: {:?}", dol_state.admin);
+        msg!("DoL program initialized with super admin: {:?}", dol_state.super_admin);
         Ok(())
     }
 
@@ -42,10 +91,19 @@ pub mod dol_program {
         Ok(())
     }
 
-    /// Add a new book to the catalog (admin only)
+    /// Add a new book to the catalog (super admin, admin, or curator)
     /// Books are stored with metadata pointing to IPFS content
     /// The client must provide a unique UUID for the book ID
     pub fn add_book(ctx: Context<AddBook>, id: [u8; 16], title: String, author: String, ipfs_hash: String, genre: String) -> Result<()> {
+        let dol_state: &mut Account<'_, DoLState> = &mut ctx.accounts.dol_state;
+        let signer = &ctx.accounts.authority.key();
+
+        // Check if user has permission to add books
+        require!(
+            dol_state.can_add_books(signer),
+            DoLError::InsufficientPermissions
+        );
+
         // Validate UUID is not all zeros
         require!(id != [0; 16], DoLError::InvalidBookId);
         
@@ -55,7 +113,6 @@ pub mod dol_program {
         require!(ipfs_hash.len() >= 32 && (ipfs_hash.starts_with("Qm") || ipfs_hash.starts_with("baf")), DoLError::InvalidIpfsHash);
         require!(!genre.is_empty() && genre.len() <= 30, DoLError::GenreTooLong);
         
-        let dol_state: &mut Account<'_, DoLState> = &mut ctx.accounts.dol_state;
         let book: &mut Account<'_, Book> = &mut ctx.accounts.book;
         
         // Store book metadata with client-provided UUID
@@ -71,7 +128,7 @@ pub mod dol_program {
         // Increment counter for analytics
         dol_state.book_count += 1;
         
-        msg!("Book added: {} by {} (ID: {:?})", book.title, book.author, &id[..4]);
+        msg!("Book added: {} by {} (ID: {:?}) by {:?}", book.title, book.author, &id[..4], signer);
         Ok(())
     }
 
@@ -88,17 +145,127 @@ pub mod dol_program {
         msg!("Access verified for card holder: {:?}", library_card.owner);
         Ok(())
     }
+
+    /// Add a new admin (super admin or admin only)
+    pub fn add_admin(ctx: Context<ManageAdmin>, new_admin: Pubkey) -> Result<()> {
+        let dol_state: &mut Account<'_, DoLState> = &mut ctx.accounts.dol_state;
+        let signer = &ctx.accounts.authority.key();
+
+        require!(
+            dol_state.can_manage_roles(signer),
+            DoLError::InsufficientPermissions
+        );
+
+        require!(
+            dol_state.admins.len() < MAX_ADMINS,
+            DoLError::AdminLimitReached
+        );
+
+        require!(
+            !dol_state.admins.contains(&new_admin),
+            DoLError::AdminAlreadyExists
+        );
+
+        dol_state.admins.push(new_admin);
+        msg!("Admin added: {:?} by {:?}", new_admin, signer);
+        Ok(())
+    }
+
+    /// Remove an admin (super admin only)
+    pub fn remove_admin(ctx: Context<ManageAdmin>, admin_to_remove: Pubkey) -> Result<()> {
+        let dol_state: &mut Account<'_, DoLState> = &mut ctx.accounts.dol_state;
+        let signer = &ctx.accounts.authority.key();
+
+        require!(
+            dol_state.is_super_admin(signer),
+            DoLError::OnlySuperAdmin
+        );
+
+        if let Some(pos) = dol_state.admins.iter().position(|&x| x == admin_to_remove) {
+            dol_state.admins.remove(pos);
+            msg!("Admin removed: {:?} by super admin", admin_to_remove);
+        } else {
+            return Err(DoLError::AdminNotFound.into());
+        }
+
+        Ok(())
+    }
+
+    /// Add a curator (super admin or admin only)
+    pub fn add_curator(ctx: Context<ManageAdmin>, new_curator: Pubkey) -> Result<()> {
+        let dol_state: &mut Account<'_, DoLState> = &mut ctx.accounts.dol_state;
+        let signer = &ctx.accounts.authority.key();
+
+        require!(
+            dol_state.can_manage_roles(signer),
+            DoLError::InsufficientPermissions
+        );
+
+        require!(
+            dol_state.curators.len() < MAX_CURATORS,
+            DoLError::CuratorLimitReached
+        );
+
+        require!(
+            !dol_state.curators.contains(&new_curator),
+            DoLError::CuratorAlreadyExists
+        );
+
+        dol_state.curators.push(new_curator);
+        msg!("Curator added: {:?} by {:?}", new_curator, signer);
+        Ok(())
+    }
+
+    /// Remove a curator (super admin or admin only)
+    pub fn remove_curator(ctx: Context<ManageAdmin>, curator_to_remove: Pubkey) -> Result<()> {
+        let dol_state: &mut Account<'_, DoLState> = &mut ctx.accounts.dol_state;
+        let signer = &ctx.accounts.authority.key();
+
+        require!(
+            dol_state.can_manage_roles(signer),
+            DoLError::InsufficientPermissions
+        );
+
+        if let Some(pos) = dol_state.curators.iter().position(|&x| x == curator_to_remove) {
+            dol_state.curators.remove(pos);
+            msg!("Curator removed: {:?} by {:?}", curator_to_remove, signer);
+        } else {
+            return Err(DoLError::CuratorNotFound.into());
+        }
+
+        Ok(())
+    }
+
+    /// Transfer super admin role (current super admin only)
+    pub fn transfer_super_admin(ctx: Context<ManageAdmin>, new_super_admin: Pubkey) -> Result<()> {
+        let dol_state: &mut Account<'_, DoLState> = &mut ctx.accounts.dol_state;
+        let signer = &ctx.accounts.authority.key();
+
+        require!(
+            dol_state.is_super_admin(signer),
+            DoLError::OnlySuperAdmin
+        );
+
+        let old_super_admin = dol_state.super_admin;
+        dol_state.super_admin = new_super_admin;
+        
+        msg!("Super admin transferred from {:?} to {:?}", old_super_admin, new_super_admin);
+        Ok(())
+    }
 }
 
 // Account structures
-/// Global program state - tracks admin authority and book catalog size
+/// Global program state - tracks admin authorities and book catalog size
 #[account]
 pub struct DoLState {
-    pub admin: Pubkey,              // Who can add books to the catalog
+    pub super_admin: Pubkey,        // Hardcoded super admin with full control
+    pub admins: Vec<Pubkey>,        // Library admins (can add/remove books, manage roles)
+    pub moderators: Vec<Pubkey>,    // Moderators (can flag content, limited admin powers)
+    pub curators: Vec<Pubkey>,      // Curators (can add books but not remove)
     pub book_count: u64,            // Total books added (for analytics and metrics)
     pub version: u8,                // Program version for future upgrades
     pub bump: u8,                   // PDA bump seed
-    pub reserved: [u8; 64],         // Reserved space for future features
+    pub reserved: [u8; 32],         // Reserved space for future features (reduced)
 }
 
 /// Individual book record with metadata and IPFS content reference
@@ -126,19 +293,19 @@ pub struct LibraryCard {
 }
 
 // Context structures
-/// Initialize the DoL program state account
+/// Initialize the DoL program state account (super admin only)
 #[derive(Accounts)]
 pub struct Initialize<'info> {
     #[account(
         init,
-        payer = admin,
-        space = ANCHOR_DISCRIMINATOR + 32 + 8 + 1 + 1 + 64,
+        payer = super_admin,
+        space = ANCHOR_DISCRIMINATOR + 32 + (4 + MAX_ADMINS * 32) + (4 + MAX_MODERATORS * 32) + (4 + MAX_CURATORS * 32) + 8 + 1 + 1 + 32,
         seeds = [b"dol_state"],              // Global singleton PDA
         bump
     )]
     pub dol_state: Account<'info, DoLState>,
     #[account(mut)]
-    pub admin: Signer<'info>,
+    pub super_admin: Signer<'info>,
     pub system_program: Program<'info, System>,
 }
 
@@ -158,28 +325,40 @@ pub struct MintLibraryCard<'info> {
     pub system_program: Program<'info, System>,
 }
 
-/// Add a new book to the catalog (admin only)
+/// Add a new book to the catalog (super admin, admin, or curator)
 #[derive(Accounts)]
 #[instruction(id: [u8; 16], title: String, author: String, ipfs_hash: String, genre: String)]
 pub struct AddBook<'info> {
     #[account(
         mut,
-        has_one = admin,                    // Ensures only the designated admin can add books
         seeds = [b"dol_state"],
         bump = dol_state.bump
     )]
     pub dol_state: Account<'info, DoLState>,
     #[account(
         init,
-        payer = admin,
+        payer = authority,
         space = ANCHOR_DISCRIMINATOR + 16 + (4 + title.len()) + (4 + author.len()) + (4 + ipfs_hash.len()) + (4 + genre.len()) + 2 + 8 + 1 + 32,
         seeds = [b"book", id.as_ref()],     // UUID-based PDA addressing
         bump
     )]
     pub book: Account<'info, Book>,
     #[account(mut)]
-    pub admin: Signer<'info>,
+    pub authority: Signer<'info>,
     pub system_program: Program<'info, System>,
+}
+
+/// Manage admin roles (super admin or admin can manage roles)
+#[derive(Accounts)]
+pub struct ManageAdmin<'info> {
+    #[account(
+        mut,
+        seeds = [b"dol_state"],
+        bump = dol_state.bump
+    )]
+    pub dol_state: Account<'info, DoLState>,
+    #[account(mut)]
+    pub authority: Signer<'info>,
 }
 
 /// Read book information (public access)
@@ -213,4 +392,29 @@ pub enum DoLError {
     InvalidBookId,
     #[msg("Book with this ID already exists")]
     BookAlreadyExists,
+    // Role-based access control errors
+    #[msg("Access denied: Only super admin can perform this action")]
+    NotSuperAdmin,
+    #[msg("Access denied: Only super admin can perform this action")]
+    OnlySuperAdmin,
+    #[msg("Access denied: Insufficient permissions for this action")]
+    InsufficientPermissions,
+    #[msg("Admin limit reached: Cannot add more admins")]
+    AdminLimitReached,
+    #[msg("Admin already exists")]
+    AdminAlreadyExists,
+    #[msg("Admin not found")]
+    AdminNotFound,
+    #[msg("Curator limit reached: Cannot add more curators")]
+    CuratorLimitReached,
+    #[msg("Curator already exists")]
+    CuratorAlreadyExists,
+    #[msg("Curator not found")]
+    CuratorNotFound,
+    #[msg("Moderator limit reached: Cannot add more moderators")]
+    ModeratorLimitReached,
+    #[msg("Moderator already exists")]
+    ModeratorAlreadyExists,
+    #[msg("Moderator not found")]
+    ModeratorNotFound,
 }
