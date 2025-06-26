@@ -28,6 +28,12 @@ importers:
         specifier: ^4.20.3
         version: 4.20.3
 
+  ts-services/apps/dol-client:
+    dependencies:
+      tsx:
+        specifier: ^4.20.3
+        version: 4.20.3
+
 packages:
 
   '@babel/runtime@7.27.6':
