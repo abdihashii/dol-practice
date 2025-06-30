@@ -133,6 +133,7 @@ pub mod dol_program {
         dol_state.moderators = Vec::new();
         dol_state.curators = Vec::new();
         dol_state.book_count = 0;
+        dol_state.used_card_uuids = Vec::new();
         dol_state.version = 1;
         dol_state.is_paused = false; // Start unpaused by default
         dol_state.bump = ctx.bumps.dol_state;
@@ -146,14 +147,33 @@ pub mod dol_program {
 
     /// Mint a free Library Card NFT that grants access to read all books
     /// Each user can only have one card (enforced by PDA seeds)
-    pub fn mint_library_card(ctx: Context<MintLibraryCard>) -> Result<()> {
+    /// Card UUID must be unique across the entire system
+    pub fn mint_library_card(ctx: Context<MintLibraryCard>, card_uuid: [u8; 16]) -> Result<()> {
+        // Validate UUID is not all zeros
+        require!(card_uuid != [0; 16], DoLError::InvalidCardId);
+
+        // Check UUID uniqueness across all cards
+        let dol_state: &mut Account<'_, DoLState> = &mut ctx.accounts.dol_state;
+        require!(
+            !dol_state.used_card_uuids.contains(&card_uuid),
+            DoLError::CardUuidAlreadyExists
+        );
+
+        // Create the library card
         let library_card: &mut Account<'_, LibraryCard> = &mut ctx.accounts.library_card;
         library_card.owner = ctx.accounts.user.key();
-        library_card.card_id = Clock::get()?.unix_timestamp as u64;
+        library_card.card_id = card_uuid;
         library_card.mint_timestamp = Clock::get()?.unix_timestamp;
         library_card.bump = ctx.bumps.library_card;
 
-        msg!("Library card minted for: {:?}", library_card.owner);
+        // Register UUID as used in the global registry
+        dol_state.used_card_uuids.push(card_uuid);
+
+        msg!(
+            "Library card minted for: {:?} with UUID: {:?}",
+            library_card.owner,
+            &card_uuid[..4]
+        );
         Ok(())
     }
 
@@ -520,15 +540,16 @@ pub mod dol_program {
 /// Global program state - tracks admin authorities and book catalog size
 #[account]
 pub struct DoLState {
-    pub super_admin: Pubkey,     // Hardcoded super admin with full control
-    pub admins: Vec<Pubkey>,     // Library admins (can add/remove books, manage roles)
-    pub moderators: Vec<Pubkey>, // Moderators (can flag content, limited admin powers)
-    pub curators: Vec<Pubkey>,   // Curators (can add books but not remove)
-    pub book_count: u64,         // Total books added (for analytics and metrics)
-    pub version: u8,             // Program version for future upgrades
-    pub is_paused: bool,         // Emergency pause state (super admin only)
-    pub bump: u8,                // PDA bump seed
-    pub reserved: [u8; 31],      // Reserved space for future features (reduced by 1)
+    pub super_admin: Pubkey,        // Hardcoded super admin with full control
+    pub admins: Vec<Pubkey>,        // Library admins (can add/remove books, manage roles)
+    pub moderators: Vec<Pubkey>,    // Moderators (can flag content, limited admin powers)
+    pub curators: Vec<Pubkey>,      // Curators (can add books but not remove)
+    pub book_count: u64,            // Total books added (for analytics and metrics)
+    pub used_card_uuids: Vec<[u8; 16]>, // Track all issued card UUIDs for uniqueness
+    pub version: u8,                // Program version for future upgrades
+    pub is_paused: bool,            // Emergency pause state (super admin only)
+    pub bump: u8,                   // PDA bump seed
+    pub reserved: [u8; 15],         // Reserved space for future features (reduced for UUID registry)
 }
 
 /// Individual book record with metadata and IPFS content reference
@@ -549,11 +570,11 @@ pub struct Book {
 /// Library Card NFT that grants reading access to all books
 #[account]
 pub struct LibraryCard {
-    pub owner: Pubkey,       // Card holder's wallet address
-    pub card_id: u64,        // Unique card identifier
-    pub mint_timestamp: i64, // When card was minted
-    pub bump: u8,            // PDA bump seed
-    pub reserved: [u8; 32],  // Reserved space for future features
+    pub owner: Pubkey,          // Card holder's wallet address
+    pub card_id: [u8; 16],      // Unique card identifier (UUID v4)
+    pub mint_timestamp: i64,    // When card was minted
+    pub bump: u8,               // PDA bump seed
+    pub reserved: [u8; 32],     // Reserved space for future features
 }
 
 // Context structures
@@ -563,7 +584,7 @@ pub struct Initialize<'info> {
     #[account(
         init,
         payer = super_admin,
-        space = ANCHOR_DISCRIMINATOR + 32 + (4 + MAX_ADMINS * 32) + (4 + MAX_MODERATORS * 32) + (4 + MAX_CURATORS * 32) + 8 + 1 + 1 + 1 + 31,
+        space = ANCHOR_DISCRIMINATOR + 32 + (4 + MAX_ADMINS * 32) + (4 + MAX_MODERATORS * 32) + (4 + MAX_CURATORS * 32) + 8 + (4 + 1000 * 16) + 1 + 1 + 1 + 15,
         seeds = [b"dol_state"],              // Global singleton PDA
         bump
     )]
@@ -577,9 +598,15 @@ pub struct Initialize<'info> {
 #[derive(Accounts)]
 pub struct MintLibraryCard<'info> {
     #[account(
+        mut,
+        seeds = [b"dol_state"],
+        bump = dol_state.bump
+    )]
+    pub dol_state: Account<'info, DoLState>,
+    #[account(
         init,
         payer = user,
-        space = ANCHOR_DISCRIMINATOR + 32 + 8 + 8 + 1 + 32,
+        space = ANCHOR_DISCRIMINATOR + 32 + 16 + 8 + 1 + 32,  // Updated: card_id is now 16 bytes (UUID) instead of 8 bytes (u64)
         seeds = [b"library_card", user.key().as_ref()],    // User-specific PDA
         bump
     )]
@@ -687,6 +714,10 @@ pub enum DoLError {
     InvalidBookId,
     #[msg("Book with this ID already exists")]
     BookAlreadyExists,
+    #[msg("Card ID cannot be all zeros (must be a valid UUID)")]
+    InvalidCardId,
+    #[msg("Card with this UUID already exists")]
+    CardUuidAlreadyExists,
     // Role-based access control errors
     #[msg("Access denied: Only super admin can perform this action")]
     NotSuperAdmin,
