@@ -36,10 +36,6 @@ cd ts-services/apps/dol-client
 pnpm install
 pnpm start initialize --keypair ~/.config/solana/id.json
 pnpm start mint-card --keypair ~/.config/solana/id.json
-
-# Counter Client (for testing)
-cd ts-services/apps/counter-client
-pnpm start initialize --keypair ~/.config/solana/id.json
 ```
 
 ### Linting and Code Quality
@@ -61,14 +57,12 @@ solana logs | grep "Program"  # Watch all program logs
 
 ### Solana Programs (rust-services/programs/)
 
-1. **dol-program**: Main library program with:
+**dol-program**: Main library program with:
    - PDA-based state management (DOL_STATE_SEED = "dol-state")
    - Role-based access: SuperAdmin → Admins → Curators
    - UUID v4 validation for unique book/card identifiers
    - Program pause/unpause functionality
    - Book catalog with IPFS hash storage
-
-2. **counter-program**: Simple counter for testing/learning
 
 ### Key Design Patterns
 
@@ -85,8 +79,7 @@ solana logs | grep "Program"  # Watch all program logs
 
 ## Important Context
 
-1. **Program IDs**: Defined in `rust-services/Anchor.toml`
-   - Counter: `FWnVAF6MvNWPLQfSH4Moc2nfHCn5BYywnt5qWRofWeVc`
+1. **Program ID**: Defined in `rust-services/Anchor.toml`
    - DoL: `B27nKPyjDEpBtEaKFjM9X3KA5nGJpBmH8YjcoQeKWLUi`
 
 2. **State Seeds**: Program uses deterministic seeds for PDAs

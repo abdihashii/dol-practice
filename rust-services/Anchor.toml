@@ -6,11 +6,9 @@ resolution = true
 skip-lint = false
 
 [programs.Devnet]
-counter_program = "89oT3JtfnGATv6hTyzt3fD3y95JNrmEzDRRMYrJ8X53R"
 dol_program = "DoLotrsAZR2JYa4tjue2c5q4EYKMbm6kxcrvjbU5cxX5"
 
 [programs.localnet]
-counter_program = "9muGHnxBxrwhTGzET1mxYdSpKxLcE5w9Kw9yHSvzTKEH"
 dol_program = "DoLotrsAZR2JYa4tjue2c5q4EYKMbm6kxcrvjbU5cxX5"
 
 [registry]
