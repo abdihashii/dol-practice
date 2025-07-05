@@ -49,6 +49,40 @@ impl DoLState {
     pub fn can_manage_roles(&self, user: &Pubkey) -> bool {
         self.is_super_admin(user) || self.is_admin(user)
     }
+
+    pub fn is_paused(&self) -> bool {
+        self.flags & 1 != 0
+    }
+
+    pub fn set_paused(&mut self, paused: bool) {
+        if paused {
+            self.flags |= 1;
+        } else {
+            self.flags &= !1;
+        }
+    }
+
+    pub fn has_pending_transfer(&self) -> bool {
+        self.pending_super_admin.is_some()
+    }
+
+    pub fn get_transfer_status(&self) -> (bool, Option<Pubkey>, i64, i64) {
+        (
+            self.has_pending_transfer(),
+            self.pending_super_admin,
+            self.transfer_initiated_at,
+            self.transfer_timelock,
+        )
+    }
+
+    pub fn get_emergency_recovery_status(&self) -> (bool, Option<Pubkey>, Vec<Pubkey>, u8) {
+        (
+            self.emergency_recovery_new_admin.is_some(),
+            self.emergency_recovery_new_admin,
+            self.emergency_recovery_votes.clone(),
+            self.emergency_recovery_threshold,
+        )
+    }
 }
 
 // Enhanced validation helpers
@@ -111,6 +145,58 @@ fn validate_ipfs_hash_enhanced(hash: &str) -> Result<()> {
     Ok(())
 }
 
+fn validate_uuid_v4(uuid: &[u8; 16]) -> Result<()> {
+    // Check that UUID is not all zeros
+    require!(uuid != &[0; 16], DoLError::InvalidBookId);
+
+    // Check version bits (version 4 should have 0100 in bits 48-51)
+    // This is the 7th byte (0-indexed byte 6), upper nibble should be 4
+    let version_byte = uuid[6];
+    let version = (version_byte >> 4) & 0x0F;
+    require!(version == 4, DoLError::InvalidBookId);
+
+    // Check variant bits (should be 10xx in bits 64-65)
+    // This is the 9th byte (0-indexed byte 8), upper 2 bits should be 10
+    let variant_byte = uuid[8];
+    let variant = (variant_byte >> 6) & 0x03;
+    require!(variant == 2, DoLError::InvalidBookId);
+
+    Ok(())
+}
+
+fn validate_super_admin_address(
+    new_super_admin: &Pubkey,
+    current_super_admin: &Pubkey,
+    dol_state: &DoLState,
+) -> Result<()> {
+    // Check if address is not default/zero
+    require!(
+        *new_super_admin != Pubkey::default(),
+        DoLError::InvalidSuperAdmin
+    );
+
+    // Check if not transferring to self
+    require!(
+        *new_super_admin != *current_super_admin,
+        DoLError::SelfTransferNotAllowed
+    );
+
+    // Prevent transfer to existing admin addresses to avoid conflicts
+    require!(
+        !dol_state.admins.contains(new_super_admin),
+        DoLError::InvalidSuperAdmin
+    );
+
+    // Additional security: prevent transfer to system program addresses
+    let system_program: Pubkey = anchor_lang::system_program::ID;
+    require!(
+        *new_super_admin != system_program,
+        DoLError::InvalidSuperAdmin
+    );
+
+    Ok(())
+}
+
 #[program]
 pub mod dol_program {
     use super::*;
@@ -133,10 +219,18 @@ pub mod dol_program {
         dol_state.moderators = Vec::new();
         dol_state.curators = Vec::new();
         dol_state.book_count = 0;
-        dol_state.used_card_uuids = Vec::new();
         dol_state.version = 1;
-        dol_state.is_paused = false; // Start unpaused by default
+        dol_state.flags = 0; // Start unpaused (bit 0 = 0)
         dol_state.bump = ctx.bumps.dol_state;
+        // Initialize secure transfer fields
+        dol_state.pending_super_admin = None;
+        dol_state.transfer_initiated_at = 0;
+        dol_state.transfer_timelock = 7 * 24 * 60 * 60; // 7 days in seconds
+                                                        // Initialize emergency recovery fields
+        dol_state.emergency_recovery_threshold = 2; // Require 2 admin signatures minimum
+        dol_state.emergency_recovery_initiated_at = 0;
+        dol_state.emergency_recovery_votes = Vec::new();
+        dol_state.emergency_recovery_new_admin = None;
 
         msg!(
             "DoL program initialized with super admin: {:?}",
@@ -147,33 +241,14 @@ pub mod dol_program {
 
     /// Mint a free Library Card NFT that grants access to read all books
     /// Each user can only have one card (enforced by PDA seeds)
-    /// Card UUID must be unique across the entire system
-    pub fn mint_library_card(ctx: Context<MintLibraryCard>, card_uuid: [u8; 16]) -> Result<()> {
-        // Validate UUID is not all zeros
-        require!(card_uuid != [0; 16], DoLError::InvalidCardId);
-
-        // Check UUID uniqueness across all cards
-        let dol_state: &mut Account<'_, DoLState> = &mut ctx.accounts.dol_state;
-        require!(
-            !dol_state.used_card_uuids.contains(&card_uuid),
-            DoLError::CardUuidAlreadyExists
-        );
-
+    pub fn mint_library_card(ctx: Context<MintLibraryCard>) -> Result<()> {
         // Create the library card
         let library_card: &mut Account<'_, LibraryCard> = &mut ctx.accounts.library_card;
         library_card.owner = ctx.accounts.user.key();
-        library_card.card_id = card_uuid;
         library_card.mint_timestamp = Clock::get()?.unix_timestamp;
         library_card.bump = ctx.bumps.library_card;
 
-        // Register UUID as used in the global registry
-        dol_state.used_card_uuids.push(card_uuid);
-
-        msg!(
-            "Library card minted for: {:?} with UUID: {:?}",
-            library_card.owner,
-            &card_uuid[..4]
-        );
+        msg!("Library card minted for: {:?}", library_card.owner);
         Ok(())
     }
 
@@ -194,7 +269,7 @@ pub mod dol_program {
         let signer: &Pubkey = &ctx.accounts.authority.key();
 
         // Check if program is paused
-        require!(!dol_state.is_paused, DoLError::ProgramPaused);
+        require!(!dol_state.is_paused(), DoLError::ProgramPaused);
 
         // Check if user has permission to add books
         require!(
@@ -202,8 +277,8 @@ pub mod dol_program {
             DoLError::InsufficientPermissions
         );
 
-        // Validate UUID is not all zeros
-        require!(id != [0; 16], DoLError::InvalidBookId);
+        // Validate UUID v4 format
+        validate_uuid_v4(&id)?;
 
         // Enhanced validation for all input fields
         validate_string_input(&title, 1, 100, "title")?;
@@ -253,7 +328,7 @@ pub mod dol_program {
         let signer: &Pubkey = &ctx.accounts.authority.key();
 
         // Check if program is paused
-        require!(!dol_state.is_paused, DoLError::ProgramPaused);
+        require!(!dol_state.is_paused(), DoLError::ProgramPaused);
 
         // Check if user has permission to update books
         require!(
@@ -479,8 +554,12 @@ pub mod dol_program {
         Ok(())
     }
 
-    /// Transfer super admin role (current super admin only)
-    pub fn transfer_super_admin(ctx: Context<ManageAdmin>, new_super_admin: Pubkey) -> Result<()> {
+    /// Initiate super admin transfer (current super admin only)
+    /// Step 1: Start the timelock period for security
+    pub fn initiate_super_admin_transfer(
+        ctx: Context<ManageAdmin>,
+        new_super_admin: Pubkey,
+    ) -> Result<()> {
         // Get the DoL state account
         let dol_state: &mut Account<'_, DoLState> = &mut ctx.accounts.dol_state;
         // Get the signer
@@ -489,15 +568,272 @@ pub mod dol_program {
         // Check if user is super admin
         require!(dol_state.is_super_admin(signer), DoLError::OnlySuperAdmin);
 
-        // Transfer the super admin role
-        let old_super_admin: Pubkey = dol_state.super_admin;
-        dol_state.super_admin = new_super_admin;
+        // Enhanced input validation
+        validate_super_admin_address(&new_super_admin, &dol_state.super_admin, dol_state)?;
 
-        msg!(
-            "Super admin transferred from {:?} to {:?}",
-            old_super_admin,
-            new_super_admin
+        // Check if there's already a pending transfer
+        require!(
+            dol_state.pending_super_admin.is_none(),
+            DoLError::TransferAlreadyPending
         );
+
+        // Initiate the transfer with timelock
+        dol_state.pending_super_admin = Some(new_super_admin);
+        dol_state.transfer_initiated_at = Clock::get()?.unix_timestamp;
+
+        // Enhanced audit logging
+        msg!("SECURITY_EVENT: Super admin transfer initiated");
+        msg!("  - Initiated by: {:?}", signer);
+        msg!("  - Current super admin: {:?}", dol_state.super_admin);
+        msg!("  - Proposed new super admin: {:?}", new_super_admin);
+        msg!(
+            "  - Timelock period: {} seconds ({} days)",
+            dol_state.transfer_timelock,
+            dol_state.transfer_timelock / (24 * 60 * 60)
+        );
+        msg!(
+            "  - Initiated at timestamp: {}",
+            dol_state.transfer_initiated_at
+        );
+        msg!(
+            "  - Can be confirmed after: {}",
+            dol_state.transfer_initiated_at + dol_state.transfer_timelock
+        );
+        Ok(())
+    }
+
+    /// Confirm super admin transfer (current super admin only)
+    /// Step 2: Complete the transfer after timelock period
+    pub fn confirm_super_admin_transfer(ctx: Context<ManageAdmin>) -> Result<()> {
+        // Get the DoL state account
+        let dol_state: &mut Account<'_, DoLState> = &mut ctx.accounts.dol_state;
+        // Get the signer
+        let signer: &Pubkey = &ctx.accounts.authority.key();
+
+        // Check if user is super admin
+        require!(dol_state.is_super_admin(signer), DoLError::OnlySuperAdmin);
+
+        // Check if there's a pending transfer
+        require!(
+            dol_state.pending_super_admin.is_some(),
+            DoLError::NoPendingTransfer
+        );
+
+        // Check if timelock period has passed
+        let current_time: i64 = Clock::get()?.unix_timestamp;
+        let time_elapsed: i64 = current_time - dol_state.transfer_initiated_at;
+        require!(
+            time_elapsed >= dol_state.transfer_timelock,
+            DoLError::TimelockNotExpired
+        );
+
+        // Complete the transfer
+        let new_super_admin: Pubkey = dol_state.pending_super_admin.unwrap();
+        let old_super_admin: Pubkey = dol_state.super_admin;
+
+        dol_state.super_admin = new_super_admin;
+        dol_state.pending_super_admin = None;
+        dol_state.transfer_initiated_at = 0;
+
+        // Enhanced audit logging
+        msg!("SECURITY_EVENT: Super admin transfer completed");
+        msg!("  - Confirmed by: {:?}", signer);
+        msg!("  - Previous super admin: {:?}", old_super_admin);
+        msg!("  - New super admin: {:?}", new_super_admin);
+        msg!(
+            "  - Transfer initiated at: {}",
+            Clock::get()?.unix_timestamp - dol_state.transfer_timelock
+        );
+        msg!(
+            "  - Transfer confirmed at: {}",
+            Clock::get()?.unix_timestamp
+        );
+        msg!("  - Timelock period elapsed: {} seconds", time_elapsed);
+        Ok(())
+    }
+
+    /// Cancel pending super admin transfer (current super admin only)
+    /// Emergency cancellation of pending transfer
+    pub fn cancel_super_admin_transfer(ctx: Context<ManageAdmin>) -> Result<()> {
+        // Get the DoL state account
+        let dol_state: &mut Account<'_, DoLState> = &mut ctx.accounts.dol_state;
+        // Get the signer
+        let signer: &Pubkey = &ctx.accounts.authority.key();
+
+        // Check if user is super admin
+        require!(dol_state.is_super_admin(signer), DoLError::OnlySuperAdmin);
+
+        // Check if there's a pending transfer
+        require!(
+            dol_state.pending_super_admin.is_some(),
+            DoLError::NoPendingTransfer
+        );
+
+        // Cancel the transfer
+        let cancelled_transfer: Pubkey = dol_state.pending_super_admin.unwrap();
+        dol_state.pending_super_admin = None;
+        dol_state.transfer_initiated_at = 0;
+
+        // Enhanced audit logging
+        msg!("SECURITY_EVENT: Super admin transfer cancelled");
+        msg!("  - Cancelled by: {:?}", signer);
+        msg!("  - Cancelled transfer to: {:?}", cancelled_transfer);
+        msg!(
+            "  - Transfer was initiated at: {}",
+            dol_state.transfer_initiated_at
+        );
+        msg!("  - Cancelled at: {}", Clock::get()?.unix_timestamp);
+        Ok(())
+    }
+
+    /// Initiate emergency recovery (admin only)
+    /// Used when super admin key is compromised or lost
+    pub fn initiate_emergency_recovery(
+        ctx: Context<ManageAdmin>,
+        new_super_admin: Pubkey,
+    ) -> Result<()> {
+        let dol_state: &mut Account<'_, DoLState> = &mut ctx.accounts.dol_state;
+        let signer: &Pubkey = &ctx.accounts.authority.key();
+
+        // Only admins can initiate emergency recovery
+        require!(
+            dol_state.is_admin(signer),
+            DoLError::InsufficientPermissions
+        );
+
+        // Ensure there are enough admins for recovery
+        require!(
+            dol_state.admins.len() >= dol_state.emergency_recovery_threshold as usize,
+            DoLError::InsufficientAdminsForRecovery
+        );
+
+        // Validate the proposed new super admin
+        validate_super_admin_address(&new_super_admin, &dol_state.super_admin, dol_state)?;
+
+        // Check if recovery is not already in progress
+        require!(
+            dol_state.emergency_recovery_new_admin.is_none(),
+            DoLError::EmergencyRecoveryInProgress
+        );
+
+        // Initialize emergency recovery
+        dol_state.emergency_recovery_new_admin = Some(new_super_admin);
+        dol_state.emergency_recovery_initiated_at = Clock::get()?.unix_timestamp;
+        dol_state.emergency_recovery_votes = vec![*signer]; // First vote
+
+        // Enhanced audit logging
+        msg!("SECURITY_EVENT: Emergency recovery initiated");
+        msg!("  - Initiated by admin: {:?}", signer);
+        msg!("  - Current super admin: {:?}", dol_state.super_admin);
+        msg!("  - Proposed new super admin: {:?}", new_super_admin);
+        msg!(
+            "  - Votes required: {}",
+            dol_state.emergency_recovery_threshold
+        );
+        msg!("  - Current votes: 1");
+        msg!("  - Initiated at: {}", Clock::get()?.unix_timestamp);
+        Ok(())
+    }
+
+    /// Vote for emergency recovery (admin only)
+    pub fn vote_emergency_recovery(ctx: Context<ManageAdmin>) -> Result<()> {
+        let dol_state: &mut Account<'_, DoLState> = &mut ctx.accounts.dol_state;
+        let signer: &Pubkey = &ctx.accounts.authority.key();
+
+        // Only admins can vote
+        require!(
+            dol_state.is_admin(signer),
+            DoLError::InsufficientPermissions
+        );
+
+        // Check if recovery is in progress
+        require!(
+            dol_state.emergency_recovery_new_admin.is_some(),
+            DoLError::NoEmergencyRecoveryInProgress
+        );
+
+        // Check if admin has already voted
+        require!(
+            !dol_state.emergency_recovery_votes.contains(signer),
+            DoLError::AlreadyVotedForRecovery
+        );
+
+        // Add vote
+        dol_state.emergency_recovery_votes.push(*signer);
+
+        // Enhanced audit logging for vote
+        msg!("SECURITY_EVENT: Emergency recovery vote added");
+        msg!("  - Vote by admin: {:?}", signer);
+        msg!(
+            "  - Total votes: {}/{}",
+            dol_state.emergency_recovery_votes.len(),
+            dol_state.emergency_recovery_threshold
+        );
+        msg!("  - Voters: {:?}", dol_state.emergency_recovery_votes);
+
+        // Check if enough votes are collected
+        if dol_state.emergency_recovery_votes.len()
+            >= dol_state.emergency_recovery_threshold as usize
+        {
+            // Execute recovery
+            let new_super_admin: Pubkey = dol_state.emergency_recovery_new_admin.unwrap();
+            let old_super_admin: Pubkey = dol_state.super_admin;
+
+            dol_state.super_admin = new_super_admin;
+
+            // Clear recovery state
+            dol_state.emergency_recovery_new_admin = None;
+            dol_state.emergency_recovery_initiated_at = 0;
+            dol_state.emergency_recovery_votes.clear();
+
+            // Enhanced audit logging for execution
+            msg!("SECURITY_EVENT: Emergency recovery executed");
+            msg!("  - Previous super admin: {:?}", old_super_admin);
+            msg!("  - New super admin: {:?}", new_super_admin);
+            msg!(
+                "  - Recovery initiated at: {}",
+                dol_state.emergency_recovery_initiated_at
+            );
+            msg!("  - Recovery executed at: {}", Clock::get()?.unix_timestamp);
+            msg!("  - Final vote by: {:?}", signer);
+        }
+
+        Ok(())
+    }
+
+    /// Cancel emergency recovery (super admin only)
+    pub fn cancel_emergency_recovery(ctx: Context<ManageAdmin>) -> Result<()> {
+        let dol_state: &mut Account<'_, DoLState> = &mut ctx.accounts.dol_state;
+        let signer: &Pubkey = &ctx.accounts.authority.key();
+
+        // Only super admin can cancel recovery
+        require!(dol_state.is_super_admin(signer), DoLError::OnlySuperAdmin);
+
+        // Check if recovery is in progress
+        require!(
+            dol_state.emergency_recovery_new_admin.is_some(),
+            DoLError::NoEmergencyRecoveryInProgress
+        );
+
+        // Clear recovery state
+        let cancelled_recovery: Pubkey = dol_state.emergency_recovery_new_admin.unwrap();
+        dol_state.emergency_recovery_new_admin = None;
+        dol_state.emergency_recovery_initiated_at = 0;
+        dol_state.emergency_recovery_votes.clear();
+
+        // Enhanced audit logging
+        msg!("SECURITY_EVENT: Emergency recovery cancelled");
+        msg!("  - Cancelled by super admin: {:?}", signer);
+        msg!("  - Cancelled recovery for: {:?}", cancelled_recovery);
+        msg!(
+            "  - Recovery was initiated at: {}",
+            dol_state.emergency_recovery_initiated_at
+        );
+        msg!(
+            "  - Votes collected: {}",
+            dol_state.emergency_recovery_votes.len()
+        );
+        msg!("  - Cancelled at: {}", Clock::get()?.unix_timestamp);
         Ok(())
     }
 
@@ -513,7 +849,7 @@ pub mod dol_program {
         require!(dol_state.is_super_admin(signer), DoLError::OnlySuperAdmin);
 
         // Pause the program
-        dol_state.is_paused = true;
+        dol_state.set_paused(true);
         msg!("Program paused by super admin: {:?}", signer);
         Ok(())
     }
@@ -530,7 +866,7 @@ pub mod dol_program {
         require!(dol_state.is_super_admin(signer), DoLError::OnlySuperAdmin);
 
         // Unpause the program
-        dol_state.is_paused = false;
+        dol_state.set_paused(false);
         msg!("Program unpaused by super admin: {:?}", signer);
         Ok(())
     }
@@ -540,16 +876,24 @@ pub mod dol_program {
 /// Global program state - tracks admin authorities and book catalog size
 #[account]
 pub struct DoLState {
-    pub super_admin: Pubkey,        // Hardcoded super admin with full control
-    pub admins: Vec<Pubkey>,        // Library admins (can add/remove books, manage roles)
-    pub moderators: Vec<Pubkey>,    // Moderators (can flag content, limited admin powers)
-    pub curators: Vec<Pubkey>,      // Curators (can add books but not remove)
-    pub book_count: u64,            // Total books added (for analytics and metrics)
-    pub used_card_uuids: Vec<[u8; 16]>, // Track all issued card UUIDs for uniqueness
-    pub version: u8,                // Program version for future upgrades
-    pub is_paused: bool,            // Emergency pause state (super admin only)
-    pub bump: u8,                   // PDA bump seed
-    pub reserved: [u8; 15],         // Reserved space for future features (reduced for UUID registry)
+    pub super_admin: Pubkey,     // Current super admin with full control
+    pub admins: Vec<Pubkey>,     // Library admins (can add/remove books, manage roles)
+    pub moderators: Vec<Pubkey>, // Moderators (can flag content, limited admin powers)
+    pub curators: Vec<Pubkey>,   // Curators (can add books but not remove)
+    pub book_count: u64,         // Total books added (for analytics and metrics)
+    pub version: u8,             // Program version for future upgrades
+    pub flags: u8,               // Bit flags: bit 0 = is_paused
+    pub bump: u8,                // PDA bump seed
+    // Super admin transfer security fields
+    pub pending_super_admin: Option<Pubkey>, // Pending new super admin (if transfer initiated)
+    pub transfer_initiated_at: i64,          // Timestamp when transfer was initiated
+    pub transfer_timelock: i64, // Required delay before transfer can be confirmed (default: 7 days)
+    // Emergency recovery fields
+    pub emergency_recovery_threshold: u8, // Number of admin signatures required for emergency recovery
+    pub emergency_recovery_initiated_at: i64, // Timestamp when emergency recovery was initiated
+    pub emergency_recovery_votes: Vec<Pubkey>, // Admins who have voted for emergency recovery
+    pub emergency_recovery_new_admin: Option<Pubkey>, // Proposed new super admin for recovery
+    pub reserved: [u8; 4],                // Further reduced reserved space
 }
 
 /// Individual book record with metadata and IPFS content reference
@@ -570,11 +914,10 @@ pub struct Book {
 /// Library Card NFT that grants reading access to all books
 #[account]
 pub struct LibraryCard {
-    pub owner: Pubkey,          // Card holder's wallet address
-    pub card_id: [u8; 16],      // Unique card identifier (UUID v4)
-    pub mint_timestamp: i64,    // When card was minted
-    pub bump: u8,               // PDA bump seed
-    pub reserved: [u8; 32],     // Reserved space for future features
+    pub owner: Pubkey,       // Card holder's wallet address
+    pub mint_timestamp: i64, // When card was minted
+    pub bump: u8,            // PDA bump seed
+    pub reserved: [u8; 48],  // Reserved space for future features (increased)
 }
 
 // Context structures
@@ -584,7 +927,7 @@ pub struct Initialize<'info> {
     #[account(
         init,
         payer = super_admin,
-        space = ANCHOR_DISCRIMINATOR + 32 + (4 + MAX_ADMINS * 32) + (4 + MAX_MODERATORS * 32) + (4 + MAX_CURATORS * 32) + 8 + (4 + 1000 * 16) + 1 + 1 + 1 + 15,
+        space = ANCHOR_DISCRIMINATOR + 32 + (4 + MAX_ADMINS * 32) + (4 + MAX_MODERATORS * 32) + (4 + MAX_CURATORS * 32) + 8 + 1 + 1 + 1 + (1 + 32) + 8 + 8 + 1 + 8 + (4 + MAX_ADMINS * 32) + (1 + 32) + 4,
         seeds = [b"dol_state"],              // Global singleton PDA
         bump
     )]
@@ -598,15 +941,9 @@ pub struct Initialize<'info> {
 #[derive(Accounts)]
 pub struct MintLibraryCard<'info> {
     #[account(
-        mut,
-        seeds = [b"dol_state"],
-        bump = dol_state.bump
-    )]
-    pub dol_state: Account<'info, DoLState>,
-    #[account(
         init,
         payer = user,
-        space = ANCHOR_DISCRIMINATOR + 32 + 16 + 8 + 1 + 32,  // Updated: card_id is now 16 bytes (UUID) instead of 8 bytes (u64)
+        space = ANCHOR_DISCRIMINATOR + 32 + 8 + 1 + 48,  // Removed card_id, increased reserved
         seeds = [b"library_card", user.key().as_ref()],    // User-specific PDA
         bump
     )]
@@ -710,14 +1047,10 @@ pub enum DoLError {
     GenreTooLong,
     #[msg("Library card already exists for this user")]
     CardAlreadyExists,
-    #[msg("Book ID cannot be all zeros (must be a valid UUID)")]
+    #[msg("Book ID must be a valid UUID v4")]
     InvalidBookId,
     #[msg("Book with this ID already exists")]
     BookAlreadyExists,
-    #[msg("Card ID cannot be all zeros (must be a valid UUID)")]
-    InvalidCardId,
-    #[msg("Card with this UUID already exists")]
-    CardUuidAlreadyExists,
     // Role-based access control errors
     #[msg("Access denied: Only super admin can perform this action")]
     NotSuperAdmin,
@@ -747,4 +1080,24 @@ pub enum DoLError {
     ProgramPaused,
     #[msg("Invalid input: contains forbidden characters or patterns")]
     InvalidInput,
+    // Super admin transfer security errors
+    #[msg("Invalid super admin address: cannot be zero address")]
+    InvalidSuperAdmin,
+    #[msg("Self-transfer not allowed: cannot transfer to current super admin")]
+    SelfTransferNotAllowed,
+    #[msg("Transfer already pending: cancel existing transfer first")]
+    TransferAlreadyPending,
+    #[msg("No pending transfer: initiate transfer first")]
+    NoPendingTransfer,
+    #[msg("Timelock not expired: transfer confirmation not yet available")]
+    TimelockNotExpired,
+    // Emergency recovery errors
+    #[msg("Insufficient admins for emergency recovery")]
+    InsufficientAdminsForRecovery,
+    #[msg("Emergency recovery already in progress")]
+    EmergencyRecoveryInProgress,
+    #[msg("No emergency recovery in progress")]
+    NoEmergencyRecoveryInProgress,
+    #[msg("Admin has already voted for recovery")]
+    AlreadyVotedForRecovery,
 }
