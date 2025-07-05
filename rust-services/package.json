@@ -5,7 +5,8 @@
   "license": "ISC",
   "scripts": {
     "lint:fix": "prettier */*.js \"*/**/*{.js,.ts}\" -w",
-    "lint": "prettier */*.js \"*/**/*{.js,.ts}\" --check"
+    "lint": "prettier */*.js \"*/**/*{.js,.ts}\" --check",
+    "clean": "rm -rf node_modules"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.31.1"

@@ -4,7 +4,8 @@
   "description": "Dol Practice - DoL Client",
   "scripts": {
     "start": "tsx index.ts",
-    "dev": "tsx watch index.ts"
+    "dev": "tsx watch index.ts",
+    "clean": "rm -rf node_modules"
   },
   "keywords": [],
   "author": "",
