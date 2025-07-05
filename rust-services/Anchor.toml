@@ -10,7 +10,7 @@ counter_program = "89oT3JtfnGATv6hTyzt3fD3y95JNrmEzDRRMYrJ8X53R"
 dol_program = "DoLotrsAZR2JYa4tjue2c5q4EYKMbm6kxcrvjbU5cxX5"
 
 [programs.localnet]
-counter_program = "89oT3JtfnGATv6hTyzt3fD3y95JNrmEzDRRMYrJ8X53R"
+counter_program = "9muGHnxBxrwhTGzET1mxYdSpKxLcE5w9Kw9yHSvzTKEH"
 dol_program = "DoLotrsAZR2JYa4tjue2c5q4EYKMbm6kxcrvjbU5cxX5"
 
 [registry]
@@ -22,3 +22,5 @@ wallet = "~/.config/solana/A1.json"
 
 [scripts]
 test = "pnpx ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
+init-dol = "pnpx ts-node scripts/initialize-dol.ts"
+check-dol = "pnpx ts-node scripts/init-dol-test.ts"
