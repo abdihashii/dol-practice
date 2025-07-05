@@ -61,26 +61,17 @@ async function mintLibraryCard(
 ): Promise<void> {
   console.log("🎫 Minting library card...");
 
-  const cardUuid = generateBookId(); // Reuse existing UUID generation
-  const dolStatePDA = getDoLStatePDA();
   const libraryCardPDA = getLibraryCardPDA(user.publicKey);
   const discriminator = getInstructionDiscriminator("mint_library_card");
 
-  // Build instruction data with UUID parameter
-  const instructionData = Buffer.concat([
-    discriminator,
-    cardUuid,
-  ]);
-
   const instruction = new TransactionInstruction({
     keys: [
-      { pubkey: dolStatePDA, isSigner: false, isWritable: true },
       { pubkey: libraryCardPDA, isSigner: false, isWritable: true },
       { pubkey: user.publicKey, isSigner: true, isWritable: true },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ],
     programId: PROGRAM_ID,
-    data: instructionData,
+    data: discriminator,
   });
 
   const transaction = new Transaction().add(instruction);
@@ -93,12 +84,6 @@ async function mintLibraryCard(
     console.log("✅ Library card minted!");
     console.log("📍 Library Card address:", libraryCardPDA.toBase58());
     console.log("👤 Owner:", user.publicKey.toBase58());
-    console.log(
-      "🆔 Card UUID:",
-      Array.from(cardUuid.slice(0, 4))
-        .map((b) => b.toString(16).padStart(2, "0"))
-        .join("")
-    );
     console.log("🔗 Transaction signature:", signature);
   } catch (error) {
     console.error("Failed to mint library card:", error);
@@ -196,8 +181,12 @@ async function updateBook(
 
   // Serialize optional updates
   const titleBytes = updates.title ? Buffer.from(updates.title, "utf8") : null;
-  const authorBytes = updates.author ? Buffer.from(updates.author, "utf8") : null;
-  const ipfsBytes = updates.ipfsHash ? Buffer.from(updates.ipfsHash, "utf8") : null;
+  const authorBytes = updates.author
+    ? Buffer.from(updates.author, "utf8")
+    : null;
+  const ipfsBytes = updates.ipfsHash
+    ? Buffer.from(updates.ipfsHash, "utf8")
+    : null;
   const genreBytes = updates.genre ? Buffer.from(updates.genre, "utf8") : null;
 
   // Build instruction data with Option<String> serialization
@@ -391,7 +380,7 @@ async function getBook(
     }
 
     const bookPDA = getBookPDA(bookId);
-    
+
     // First check if the book exists
     const accountInfo = await connection.getAccountInfo(bookPDA);
     if (!accountInfo) {
@@ -410,7 +399,11 @@ async function getBook(
     const transaction = new Transaction().add(instruction);
 
     // Send the transaction to trigger the program logs
-    const signature = await sendAndConfirmTransaction(connection, transaction, []);
+    const signature = await sendAndConfirmTransaction(
+      connection,
+      transaction,
+      []
+    );
 
     console.log("✅ Book details retrieved!");
     console.log("📍 Book address:", bookPDA.toBase58());
@@ -430,7 +423,7 @@ async function getLibraryCard(
   try {
     const ownerPubkey = new PublicKey(ownerAddress);
     const libraryCardPDA = getLibraryCardPDA(ownerPubkey);
-    
+
     // Check if the library card exists and get account data
     const accountInfo = await connection.getAccountInfo(libraryCardPDA);
     if (!accountInfo) {
@@ -442,20 +435,23 @@ async function getLibraryCard(
     // Parse the library card data
     // Library card structure: [discriminator(8)] + [owner(32)] + [card_id(16)] + [mint_timestamp(8)] + [bump(1)] + [reserved(32)]
     const data = accountInfo.data;
-    
+
     // Skip discriminator (first 8 bytes)
     const ownerBytes = data.slice(8, 40);
-    const cardIdBytes = data.slice(40, 56);  // Updated: UUID is 16 bytes
-    const mintTimestampBytes = data.slice(56, 64);  // Updated: shifted by 8 bytes
-    
+    const cardIdBytes = data.slice(40, 56); // Updated: UUID is 16 bytes
+    const mintTimestampBytes = data.slice(56, 64); // Updated: shifted by 8 bytes
+
     // Parse the data
     const cardOwner = new PublicKey(ownerBytes);
-    const cardUuid = cardIdBytes;  // UUID as raw bytes
-    const mintTimestamp = new DataView(mintTimestampBytes.buffer, mintTimestampBytes.byteOffset).getBigInt64(0, true);
-    
+    const cardUuid = cardIdBytes; // UUID as raw bytes
+    const mintTimestamp = new DataView(
+      mintTimestampBytes.buffer,
+      mintTimestampBytes.byteOffset
+    ).getBigInt64(0, true);
+
     // Convert timestamp to readable date
     const mintDate = new Date(Number(mintTimestamp) * 1000);
-    
+
     // Format UUID for display
     const uuidHex = Array.from(cardUuid)
       .map((b) => b.toString(16).padStart(2, "0"))
@@ -470,7 +466,10 @@ async function getLibraryCard(
     console.log("💾 Account size:", accountInfo.data.length, "bytes");
     console.log("🏠 Owner program:", accountInfo.owner.toBase58());
   } catch (error) {
-    if (error instanceof Error && error.message.includes("Invalid public key")) {
+    if (
+      error instanceof Error &&
+      error.message.includes("Invalid public key")
+    ) {
       console.error("❌ Invalid wallet address format");
     } else {
       console.error("Failed to get library card:", error);
@@ -691,7 +690,9 @@ async function main(): Promise<void> {
   if (command === "get-library-card") {
     const ownerAddress = args[1];
     if (!ownerAddress) {
-      console.error("Please provide wallet address: pnpm start get-library-card <wallet_address>");
+      console.error(
+        "Please provide wallet address: pnpm start get-library-card <wallet_address>"
+      );
       return;
     }
     await getLibraryCard(connection, ownerAddress);
@@ -818,7 +819,9 @@ async function main(): Promise<void> {
           return;
         }
         try {
-          const newSuperAdminPubkey = new PublicKey(args[newSuperAdminIndex + 1]);
+          const newSuperAdminPubkey = new PublicKey(
+            args[newSuperAdminIndex + 1]
+          );
           await transferSuperAdmin(connection, payer, newSuperAdminPubkey);
         } catch {
           console.error("Invalid super admin public key format");
@@ -857,7 +860,9 @@ async function main(): Promise<void> {
         }
 
         if (Object.keys(updates).length === 0) {
-          console.error("No fields to update. Provide at least one: --title, --author, --ipfs, or --genre");
+          console.error(
+            "No fields to update. Provide at least one: --title, --author, --ipfs, or --genre"
+          );
           showUsage();
           return;
         }
@@ -887,7 +892,10 @@ async function main(): Promise<void> {
           const removeBookId = new Uint8Array(16);
           const removeHex = removeBookIdHex.replace(/-/g, "");
           for (let i = 0; i < Math.min(16, removeHex.length / 2); i++) {
-            removeBookId[i] = parseInt(removeHex.substring(i * 2, i * 2 + 2), 16);
+            removeBookId[i] = parseInt(
+              removeHex.substring(i * 2, i * 2 + 2),
+              16
+            );
           }
           await removeBook(connection, payer, removeBookId);
         } catch {
