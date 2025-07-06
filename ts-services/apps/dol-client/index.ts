@@ -22,7 +22,7 @@ import {
 
 async function initializeDoL(
   connection: Connection,
-  admin: Keypair
+  admin: Keypair,
 ): Promise<void> {
   console.log("🚀 Initializing DoL program...");
 
@@ -57,7 +57,7 @@ async function initializeDoL(
 
 async function mintLibraryCard(
   connection: Connection,
-  user: Keypair
+  user: Keypair,
 ): Promise<void> {
   console.log("🎫 Minting library card...");
 
@@ -96,7 +96,7 @@ async function addBook(
   title: string,
   author: string,
   ipfsHash: string,
-  genre: string
+  genre: string,
 ): Promise<void> {
   console.log("📚 Adding book...");
 
@@ -153,7 +153,7 @@ async function addBook(
       "🆔 Book ID:",
       Array.from(bookId.slice(0, 4))
         .map((b) => b.toString(16).padStart(2, "0"))
-        .join("")
+        .join(""),
     );
     console.log("📍 Book address:", bookPDA.toBase58());
     console.log("🔗 Transaction signature:", signature);
@@ -171,7 +171,7 @@ async function updateBook(
     author?: string;
     ipfsHash?: string;
     genre?: string;
-  }
+  },
 ): Promise<void> {
   console.log("📝 Updating book...");
 
@@ -269,7 +269,7 @@ async function updateBook(
 async function removeBook(
   connection: Connection,
   authority: Keypair,
-  bookId: Uint8Array
+  bookId: Uint8Array,
 ): Promise<void> {
   console.log("🗑️ Removing book...");
 
@@ -304,7 +304,7 @@ async function removeBook(
 
 async function pauseProgram(
   connection: Connection,
-  authority: Keypair
+  authority: Keypair,
 ): Promise<void> {
   console.log("⏸️ Pausing program...");
 
@@ -336,7 +336,7 @@ async function pauseProgram(
 
 async function unpauseProgram(
   connection: Connection,
-  authority: Keypair
+  authority: Keypair,
 ): Promise<void> {
   console.log("▶️ Unpausing program...");
 
@@ -368,7 +368,7 @@ async function unpauseProgram(
 
 async function getBook(
   connection: Connection,
-  bookIdHex: string
+  bookIdHex: string,
 ): Promise<void> {
   console.log("📖 Getting book information...");
 
@@ -402,7 +402,7 @@ async function getBook(
     const signature = await sendAndConfirmTransaction(
       connection,
       transaction,
-      []
+      [],
     );
 
     console.log("✅ Book details retrieved!");
@@ -416,7 +416,7 @@ async function getBook(
 
 async function getLibraryCard(
   connection: Connection,
-  ownerAddress: string
+  ownerAddress: string,
 ): Promise<void> {
   console.log("🎫 Getting library card information...");
 
@@ -446,7 +446,7 @@ async function getLibraryCard(
     const cardUuid = cardIdBytes; // UUID as raw bytes
     const mintTimestamp = new DataView(
       mintTimestampBytes.buffer,
-      mintTimestampBytes.byteOffset
+      mintTimestampBytes.byteOffset,
     ).getBigInt64(0, true);
 
     // Convert timestamp to readable date
@@ -480,7 +480,7 @@ async function getLibraryCard(
 async function addAdmin(
   connection: Connection,
   authority: Keypair,
-  newAdminPubkey: PublicKey
+  newAdminPubkey: PublicKey,
 ): Promise<void> {
   console.log("👨‍💼 Adding new admin...");
 
@@ -519,7 +519,7 @@ async function addAdmin(
 async function removeAdmin(
   connection: Connection,
   authority: Keypair,
-  adminToRemove: PublicKey
+  adminToRemove: PublicKey,
 ): Promise<void> {
   console.log("🗑️ Removing admin...");
 
@@ -558,7 +558,7 @@ async function removeAdmin(
 async function addCurator(
   connection: Connection,
   authority: Keypair,
-  newCuratorPubkey: PublicKey
+  newCuratorPubkey: PublicKey,
 ): Promise<void> {
   console.log("📚 Adding new curator...");
 
@@ -597,7 +597,7 @@ async function addCurator(
 async function removeCurator(
   connection: Connection,
   authority: Keypair,
-  curatorToRemove: PublicKey
+  curatorToRemove: PublicKey,
 ): Promise<void> {
   console.log("🗑️ Removing curator...");
 
@@ -633,15 +633,17 @@ async function removeCurator(
   }
 }
 
-async function transferSuperAdmin(
+async function initiateSuperAdminTransfer(
   connection: Connection,
   authority: Keypair,
-  newSuperAdmin: PublicKey
+  newSuperAdmin: PublicKey,
 ): Promise<void> {
-  console.log("👑 Transferring super admin role...");
+  console.log("🔄 Initiating super admin transfer (with 7-day timelock)...");
 
   const dolStatePDA = getDoLStatePDA();
-  const discriminator = getInstructionDiscriminator("transfer_super_admin");
+  const discriminator = getInstructionDiscriminator(
+    "initiate_super_admin_transfer",
+  );
 
   const instructionData = Buffer.concat([
     discriminator,
@@ -664,11 +666,210 @@ async function transferSuperAdmin(
       authority,
     ]);
 
-    console.log("✅ Super admin role transferred!");
-    console.log("👤 New Super Admin:", newSuperAdmin.toBase58());
+    console.log("✅ Super admin transfer initiated!");
+    console.log("👤 Proposed new Super Admin:", newSuperAdmin.toBase58());
+    console.log("⏰ 7-day timelock period has started");
+    console.log(
+      "💡 Use 'confirm-super-admin-transfer' after the timelock expires",
+    );
+    console.log(
+      "🛑 Use 'cancel-super-admin-transfer' to cancel before confirmation",
+    );
     console.log("🔗 Transaction signature:", signature);
   } catch (error) {
-    console.error("Failed to transfer super admin:", error);
+    console.error("Failed to initiate super admin transfer:", error);
+  }
+}
+
+async function confirmSuperAdminTransfer(
+  connection: Connection,
+  authority: Keypair,
+): Promise<void> {
+  console.log("✅ Confirming super admin transfer...");
+
+  const dolStatePDA = getDoLStatePDA();
+  const discriminator = getInstructionDiscriminator(
+    "confirm_super_admin_transfer",
+  );
+
+  const instruction = new TransactionInstruction({
+    keys: [
+      { pubkey: dolStatePDA, isSigner: false, isWritable: true },
+      { pubkey: authority.publicKey, isSigner: true, isWritable: true },
+    ],
+    programId: PROGRAM_ID,
+    data: discriminator,
+  });
+
+  const transaction = new Transaction().add(instruction);
+
+  try {
+    const signature = await sendAndConfirmTransaction(connection, transaction, [
+      authority,
+    ]);
+
+    console.log("✅ Super admin transfer completed!");
+    console.log("👑 You are now the new super admin");
+    console.log("🔗 Transaction signature:", signature);
+  } catch (error) {
+    console.error("Failed to confirm super admin transfer:", error);
+    console.log("💡 Make sure the 7-day timelock period has passed");
+  }
+}
+
+async function cancelSuperAdminTransfer(
+  connection: Connection,
+  authority: Keypair,
+): Promise<void> {
+  console.log("🛑 Canceling super admin transfer...");
+
+  const dolStatePDA = getDoLStatePDA();
+  const discriminator = getInstructionDiscriminator(
+    "cancel_super_admin_transfer",
+  );
+
+  const instruction = new TransactionInstruction({
+    keys: [
+      { pubkey: dolStatePDA, isSigner: false, isWritable: true },
+      { pubkey: authority.publicKey, isSigner: true, isWritable: true },
+    ],
+    programId: PROGRAM_ID,
+    data: discriminator,
+  });
+
+  const transaction = new Transaction().add(instruction);
+
+  try {
+    const signature = await sendAndConfirmTransaction(connection, transaction, [
+      authority,
+    ]);
+
+    console.log("✅ Super admin transfer canceled!");
+    console.log("🔗 Transaction signature:", signature);
+  } catch (error) {
+    console.error("Failed to cancel super admin transfer:", error);
+  }
+}
+
+async function initiateEmergencyRecovery(
+  connection: Connection,
+  authority: Keypair,
+  newSuperAdmin: PublicKey,
+): Promise<void> {
+  console.log("🚨 Initiating emergency recovery...");
+
+  const dolStatePDA = getDoLStatePDA();
+  const discriminator = getInstructionDiscriminator(
+    "initiate_emergency_recovery",
+  );
+
+  const instructionData = Buffer.concat([
+    discriminator,
+    newSuperAdmin.toBuffer(),
+  ]);
+
+  const instruction = new TransactionInstruction({
+    keys: [
+      { pubkey: dolStatePDA, isSigner: false, isWritable: true },
+      { pubkey: authority.publicKey, isSigner: true, isWritable: true },
+    ],
+    programId: PROGRAM_ID,
+    data: instructionData,
+  });
+
+  const transaction = new Transaction().add(instruction);
+
+  try {
+    const signature = await sendAndConfirmTransaction(connection, transaction, [
+      authority,
+    ]);
+
+    console.log("✅ Emergency recovery initiated!");
+    console.log("👤 Proposed new Super Admin:", newSuperAdmin.toBase58());
+    console.log("🗳️  Emergency recovery requires multiple admin signatures");
+    console.log("💡 Other admins can vote with 'vote-emergency-recovery'");
+    console.log("⚠️  Use this ONLY when super admin key is compromised/lost");
+    console.log("🔗 Transaction signature:", signature);
+  } catch (error) {
+    console.error("Failed to initiate emergency recovery:", error);
+  }
+}
+
+async function voteEmergencyRecovery(
+  connection: Connection,
+  authority: Keypair,
+): Promise<void> {
+  console.log("🗳️ Voting for emergency recovery...");
+
+  const dolStatePDA = getDoLStatePDA();
+  const discriminator = getInstructionDiscriminator("vote_emergency_recovery");
+
+  const instruction = new TransactionInstruction({
+    keys: [
+      { pubkey: dolStatePDA, isSigner: false, isWritable: true },
+      { pubkey: authority.publicKey, isSigner: true, isWritable: true },
+    ],
+    programId: PROGRAM_ID,
+    data: discriminator,
+  });
+
+  const transaction = new Transaction().add(instruction);
+
+  try {
+    const signature = await sendAndConfirmTransaction(connection, transaction, [
+      authority,
+    ]);
+
+    console.log("✅ Emergency recovery vote submitted!");
+    console.log("🗳️  Your vote has been recorded");
+    console.log(
+      "💡 If enough votes are collected, recovery will execute automatically",
+    );
+    console.log("🔗 Transaction signature:", signature);
+  } catch (error) {
+    console.error("Failed to vote for emergency recovery:", error);
+  }
+}
+
+async function getStatus(connection: Connection): Promise<void> {
+  console.log("📊 Checking DoL program status...");
+
+  try {
+    const dolStatePDA = getDoLStatePDA();
+    const accountInfo = await connection.getAccountInfo(dolStatePDA);
+
+    if (!accountInfo) {
+      console.log("❌ DoL program not initialized");
+      console.log("💡 Use 'initialize' command to set up the program");
+      return;
+    }
+
+    // Parse DoL state data (simplified version)
+    const data = accountInfo.data;
+
+    // Skip discriminator (8 bytes) and parse basic fields
+    const superAdminBytes = data.slice(8, 40);
+    const superAdmin = new PublicKey(superAdminBytes);
+
+    // Get book count (skip admins vector and other fields - simplified parsing)
+    // This is a basic implementation; in production you'd want proper deserialization
+    console.log("✅ DoL program status:");
+    console.log("📍 DoL State PDA:", dolStatePDA.toBase58());
+    console.log("👑 Current Super Admin:", superAdmin.toBase58());
+    console.log("💾 Account size:", accountInfo.data.length, "bytes");
+    console.log("🏠 Owner program:", accountInfo.owner.toBase58());
+    console.log("💰 Lamports:", accountInfo.lamports);
+
+    console.log("\n🔐 Security Features:");
+    console.log("  • 7-day timelock for super admin transfers");
+    console.log("  • Multi-admin emergency recovery system");
+    console.log("  • Rate limiting: 50 books/day, 60s cooldown");
+    console.log("  • Program pause/unpause capability");
+    console.log("  • Improved IPFS hash validation");
+
+    console.log("\n💡 Use individual commands to check specific functionality");
+  } catch (error) {
+    console.error("Failed to get DoL status:", error);
   }
 }
 
@@ -691,11 +892,16 @@ async function main(): Promise<void> {
     const ownerAddress = args[1];
     if (!ownerAddress) {
       console.error(
-        "Please provide wallet address: pnpm start get-library-card <wallet_address>"
+        "Please provide wallet address: pnpm start get-library-card <wallet_address>",
       );
       return;
     }
     await getLibraryCard(connection, ownerAddress);
+    return;
+  }
+
+  if (command === "status") {
+    await getStatus(connection);
     return;
   }
 
@@ -747,7 +953,7 @@ async function main(): Promise<void> {
           args[titleIndex + 1],
           args[authorIndex + 1],
           args[ipfsIndex + 1],
-          args[genreIndex + 1]
+          args[genreIndex + 1],
         );
         break;
 
@@ -811,7 +1017,7 @@ async function main(): Promise<void> {
         }
         break;
 
-      case "transfer-super-admin":
+      case "initiate-super-admin-transfer":
         const newSuperAdminIndex = args.indexOf("--new-super-admin");
         if (newSuperAdminIndex === -1 || !args[newSuperAdminIndex + 1]) {
           console.error("Missing --new-super-admin argument");
@@ -820,12 +1026,49 @@ async function main(): Promise<void> {
         }
         try {
           const newSuperAdminPubkey = new PublicKey(
-            args[newSuperAdminIndex + 1]
+            args[newSuperAdminIndex + 1],
           );
-          await transferSuperAdmin(connection, payer, newSuperAdminPubkey);
+          await initiateSuperAdminTransfer(
+            connection,
+            payer,
+            newSuperAdminPubkey,
+          );
         } catch {
           console.error("Invalid super admin public key format");
         }
+        break;
+
+      case "confirm-super-admin-transfer":
+        await confirmSuperAdminTransfer(connection, payer);
+        break;
+
+      case "cancel-super-admin-transfer":
+        await cancelSuperAdminTransfer(connection, payer);
+        break;
+
+      case "initiate-emergency-recovery":
+        const emergencyAdminIndex = args.indexOf("--new-super-admin");
+        if (emergencyAdminIndex === -1 || !args[emergencyAdminIndex + 1]) {
+          console.error("Missing --new-super-admin argument");
+          showUsage();
+          return;
+        }
+        try {
+          const emergencyAdminPubkey = new PublicKey(
+            args[emergencyAdminIndex + 1],
+          );
+          await initiateEmergencyRecovery(
+            connection,
+            payer,
+            emergencyAdminPubkey,
+          );
+        } catch {
+          console.error("Invalid super admin public key format");
+        }
+        break;
+
+      case "vote-emergency-recovery":
+        await voteEmergencyRecovery(connection, payer);
         break;
 
       case "update-book":
@@ -861,7 +1104,7 @@ async function main(): Promise<void> {
 
         if (Object.keys(updates).length === 0) {
           console.error(
-            "No fields to update. Provide at least one: --title, --author, --ipfs, or --genre"
+            "No fields to update. Provide at least one: --title, --author, --ipfs, or --genre",
           );
           showUsage();
           return;
@@ -894,7 +1137,7 @@ async function main(): Promise<void> {
           for (let i = 0; i < Math.min(16, removeHex.length / 2); i++) {
             removeBookId[i] = parseInt(
               removeHex.substring(i * 2, i * 2 + 2),
-              16
+              16,
             );
           }
           await removeBook(connection, payer, removeBookId);

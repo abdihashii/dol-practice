@@ -12,13 +12,14 @@ declare_id!("DoLotrsAZR2JYa4tjue2c5q4EYKMbm6kxcrvjbU5cxX5");
 
 pub const ANCHOR_DISCRIMINATOR: usize = 8;
 
-// Super Admin public key
-pub const SUPER_ADMIN: &str = "AfuXGptXuHDGpnAL5V27fUkNkHTVcDPGgF1cGbmTena";
-
 // Role limits
 pub const MAX_ADMINS: usize = 3;
 pub const MAX_MODERATORS: usize = 5;
 pub const MAX_CURATORS: usize = 10;
+
+// Rate limiting constants
+pub const MAX_BOOKS_PER_DAY: u16 = 50; // Maximum books that can be added per day
+pub const BOOK_ADDITION_COOLDOWN: i64 = 60; // Minimum seconds between book additions
 
 // Role checking helper functions
 impl DoLState {
@@ -103,20 +104,11 @@ fn validate_string_input(
         }
     );
 
-    // Check for non-printable characters and common injection patterns
+    // Check for non-printable characters
     require!(
         input.chars().all(|c| c.is_ascii_graphic() || c == ' '),
         DoLError::InvalidInput
     );
-
-    // Check for SQL injection patterns (basic protection)
-    let dangerous_patterns = [
-        "SELECT", "INSERT", "UPDATE", "DELETE", "DROP", "--", "/*", "*/", ";",
-    ];
-    let input_upper = input.to_uppercase();
-    for pattern in dangerous_patterns.iter() {
-        require!(!input_upper.contains(pattern), DoLError::InvalidInput);
-    }
 
     Ok(())
 }
@@ -130,14 +122,17 @@ fn validate_ipfs_hash_enhanced(hash: &str) -> Result<()> {
 
     // Check for valid base58 characters (for Qm hashes) or base32 (for baf hashes)
     if hash.starts_with("Qm") {
+        // Base58 alphabet used by IPFS (Bitcoin alphabet without 0, O, I, l)
+        const BASE58_CHARS: &str = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
         require!(
-            hash.chars()
-                .all(|c| "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz".contains(c)),
+            hash.chars().all(|c| BASE58_CHARS.contains(c)),
             DoLError::InvalidIpfsHash
         );
     } else if hash.starts_with("baf") {
+        // Proper base32 alphabet (RFC 4648) - lowercase
+        const BASE32_CHARS: &str = "abcdefghijklmnopqrstuvwxyz234567";
         require!(
-            hash.chars().all(|c| c.is_ascii_alphanumeric()),
+            hash.chars().skip(3).all(|c| BASE32_CHARS.contains(c)),
             DoLError::InvalidIpfsHash
         );
     }
@@ -201,18 +196,12 @@ fn validate_super_admin_address(
 pub mod dol_program {
     use super::*;
 
-    /// Initialize the DoL program with super admin authority (super admin only)
+    /// Initialize the DoL program with the initializing authority as super admin
     /// This sets up the global state with role-based access control
+    /// Note: In production, use a multi-sig wallet address as the initializer
     pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
-        // Validate that signer is the hardcoded super admin
-        let super_admin_key: Pubkey = SUPER_ADMIN.parse::<Pubkey>().unwrap();
-        require!(
-            ctx.accounts.super_admin.key() == super_admin_key,
-            DoLError::NotSuperAdmin
-        );
-
-        // If user is super admin, set up the global state with role-based access control and
-        // initialize the program with default values
+        // The initializer becomes the super admin
+        // SECURITY: Ensure this is called with a multi-sig wallet in production
         let dol_state: &mut Account<'_, DoLState> = &mut ctx.accounts.dol_state;
         dol_state.super_admin = ctx.accounts.super_admin.key();
         dol_state.admins = Vec::new();
@@ -231,6 +220,10 @@ pub mod dol_program {
         dol_state.emergency_recovery_initiated_at = 0;
         dol_state.emergency_recovery_votes = Vec::new();
         dol_state.emergency_recovery_new_admin = None;
+        // Initialize rate limiting fields
+        dol_state.last_book_addition = 0;
+        dol_state.books_added_today = 0;
+        dol_state.last_book_addition_day = 0;
 
         msg!(
             "DoL program initialized with super admin: {:?}",
@@ -277,6 +270,31 @@ pub mod dol_program {
             DoLError::InsufficientPermissions
         );
 
+        // Rate limiting checks
+        let current_timestamp: i64 = Clock::get()?.unix_timestamp;
+        let current_day: i64 = current_timestamp / 86400; // Convert to day number
+
+        // Check cooldown period
+        if dol_state.last_book_addition > 0 {
+            let time_since_last_addition: i64 = current_timestamp - dol_state.last_book_addition;
+            require!(
+                time_since_last_addition >= BOOK_ADDITION_COOLDOWN,
+                DoLError::RateLimitExceeded
+            );
+        }
+
+        // Reset daily counter if it's a new day
+        if current_day != dol_state.last_book_addition_day {
+            dol_state.books_added_today = 0;
+            dol_state.last_book_addition_day = current_day;
+        }
+
+        // Check daily limit
+        require!(
+            dol_state.books_added_today < MAX_BOOKS_PER_DAY,
+            DoLError::DailyLimitExceeded
+        );
+
         // Validate UUID v4 format
         validate_uuid_v4(&id)?;
 
@@ -302,6 +320,10 @@ pub mod dol_program {
 
         // Increment counter for analytics
         dol_state.book_count += 1;
+
+        // Update rate limiting fields
+        dol_state.last_book_addition = current_timestamp;
+        dol_state.books_added_today += 1;
 
         msg!(
             "Book added: {} by {} (ID: {:?}) by {:?}",
@@ -893,7 +915,10 @@ pub struct DoLState {
     pub emergency_recovery_initiated_at: i64, // Timestamp when emergency recovery was initiated
     pub emergency_recovery_votes: Vec<Pubkey>, // Admins who have voted for emergency recovery
     pub emergency_recovery_new_admin: Option<Pubkey>, // Proposed new super admin for recovery
-    pub reserved: [u8; 4],                // Further reduced reserved space
+    // Rate limiting fields
+    pub last_book_addition: i64,     // Timestamp of last book addition
+    pub books_added_today: u16,      // Number of books added in current day
+    pub last_book_addition_day: i64, // Day (unix timestamp / 86400) of last book count reset
 }
 
 /// Individual book record with metadata and IPFS content reference
@@ -927,7 +952,7 @@ pub struct Initialize<'info> {
     #[account(
         init,
         payer = super_admin,
-        space = ANCHOR_DISCRIMINATOR + 32 + (4 + MAX_ADMINS * 32) + (4 + MAX_MODERATORS * 32) + (4 + MAX_CURATORS * 32) + 8 + 1 + 1 + 1 + (1 + 32) + 8 + 8 + 1 + 8 + (4 + MAX_ADMINS * 32) + (1 + 32) + 4,
+        space = ANCHOR_DISCRIMINATOR + 32 + (4 + MAX_ADMINS * 32) + (4 + MAX_MODERATORS * 32) + (4 + MAX_CURATORS * 32) + 8 + 1 + 1 + 1 + (1 + 32) + 8 + 8 + 1 + 8 + (4 + MAX_ADMINS * 32) + (1 + 32) + 8 + 2 + 8,
         seeds = [b"dol_state"],              // Global singleton PDA
         bump
     )]
@@ -1100,4 +1125,9 @@ pub enum DoLError {
     NoEmergencyRecoveryInProgress,
     #[msg("Admin has already voted for recovery")]
     AlreadyVotedForRecovery,
+    // Rate limiting errors
+    #[msg("Rate limit exceeded: please wait before adding another book")]
+    RateLimitExceeded,
+    #[msg("Daily limit exceeded: maximum books per day reached")]
+    DailyLimitExceeded,
 }

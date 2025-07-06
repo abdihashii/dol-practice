@@ -29,11 +29,6 @@ describe("dol-program", () => {
 
   const mockIpfsHash = "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG";
 
-  // Hardcoded super admin key from the program
-  const SUPER_ADMIN_KEY = new PublicKey(
-    "AfuXGptXuHDGpnAL5V27fUkNkHTVcDPGgF1cGbmTena"
-  );
-
   before(async () => {
     // For testing purposes, we'll create a test keypair
     // Note: In real scenarios, the actual super admin would need the correct secret key
@@ -94,61 +89,90 @@ describe("dol-program", () => {
       const dolState = await program.account.doLState.fetch(dolStatePda);
       isInitialized = true;
       console.log("DoL state already initialized");
+      console.log("Current super admin:", dolState.superAdmin.toString());
 
-      // If initialized, add our test admin as an admin
-      const superAdminKeypair = Keypair.fromSecretKey(
-        new Uint8Array(
-          JSON.parse(
-            fs.readFileSync(
-              "/Users/abdirahmanhaji/.config/solana/A1.json",
-              "utf-8"
+      // Try to load the current super admin keypair and add our test admin
+      try {
+        const superAdminKeypair = Keypair.fromSecretKey(
+          new Uint8Array(
+            JSON.parse(
+              fs.readFileSync(
+                "/Users/abdirahmanhaji/.config/solana/A1.json",
+                "utf-8"
+              )
             )
           )
-        )
-      );
+        );
 
-      // Check if super admin matches
-      if (
-        dolState.superAdmin.toString() ===
-        superAdminKeypair.publicKey.toString()
-      ) {
-        // Add our test admin as an admin
-        try {
-          await program.methods
-            .addAdmin(admin.publicKey)
-            .accounts({
-              dolState: dolStatePda,
-              authority: superAdminKeypair.publicKey,
-            } as any)
-            .signers([superAdminKeypair])
-            .rpc();
-          console.log("Test admin added to DoL state");
-        } catch (err) {
-          console.log("Admin may already exist or limit reached:", err);
+        // Check if loaded keypair matches the current super admin
+        if (
+          dolState.superAdmin.toString() ===
+          superAdminKeypair.publicKey.toString()
+        ) {
+          // Add our test admin as an admin
+          try {
+            await program.methods
+              .addAdmin(admin.publicKey)
+              .accounts({
+                dolState: dolStatePda,
+                authority: superAdminKeypair.publicKey,
+              } as any)
+              .signers([superAdminKeypair])
+              .rpc();
+            console.log("Test admin added to DoL state");
+          } catch (err) {
+            console.log("Admin may already exist or limit reached:", err);
+          }
+        } else {
+          console.log("Loaded keypair doesn't match current super admin");
         }
+      } catch (err) {
+        console.log("Could not load super admin keypair:", err);
       }
     } catch (err) {
       console.log(
-        "DoL state not initialized - will use mock initialization for tests"
+        "DoL state not initialized - will initialize with test wallet"
       );
+      // Try to initialize with our test admin as super admin
+      try {
+        await program.methods
+          .initialize()
+          .accounts({
+            dolState: dolStatePda,
+            superAdmin: admin.publicKey,
+            systemProgram: anchor.web3.SystemProgram.programId,
+          } as any)
+          .signers([admin])
+          .rpc();
+        isInitialized = true;
+        console.log("DoL state initialized with test admin as super admin");
+      } catch (initErr) {
+        console.log("Could not initialize DoL state:", initErr);
+      }
     }
   });
 
-  it("Initializes DoL state with admin", async () => {
-    // This test demonstrates the initialization flow
-    // In production, only the hardcoded super admin can initialize
+  it("Initializes DoL state with configurable super admin", async () => {
+    // This test demonstrates the new configurable initialization flow
     try {
       const dolState = await program.account.doLState.fetch(dolStatePda);
       console.log("✅ DoL state already initialized");
       console.log("📍 Super admin:", dolState.superAdmin.toString());
       console.log("📚 Book count:", dolState.bookCount.toString());
       console.log("🔢 Version:", dolState.version);
+      console.log(
+        "⏰ Rate limiting - Books added today:",
+        dolState.booksAddedToday
+      );
+      console.log(
+        "⏰ Rate limiting - Last addition day:",
+        dolState.lastBookAdditionDay
+      );
       isInitialized = true;
     } catch (err) {
       console.log("⚠️ DoL state not initialized");
-      console.log("📍 Expected super admin:", SUPER_ADMIN_KEY.toString());
       console.log(
-        "ℹ️ To initialize, run: 'anchor run init-dol' with the correct super admin wallet"
+        "ℹ️ Any wallet can now initialize as super admin (multisig-ready design)"
       );
       isInitialized = false;
     }
@@ -425,11 +449,193 @@ describe("dol-program", () => {
   });
 
   // =============================================
+  // RATE LIMITING SECURITY TESTS
+  // =============================================
+
+  describe("Rate Limiting Security Tests", () => {
+    it("Enforces cooldown period between book additions", async function () {
+      if (!isInitialized) {
+        this.skip();
+        return;
+      }
+
+      const bookId1 = Array.from(crypto.getRandomValues(new Uint8Array(16)));
+      bookId1[6] = (bookId1[6] & 0x0f) | 0x40;
+      bookId1[8] = (bookId1[8] & 0x3f) | 0x80;
+
+      const bookId2 = Array.from(crypto.getRandomValues(new Uint8Array(16)));
+      bookId2[6] = (bookId2[6] & 0x0f) | 0x40;
+      bookId2[8] = (bookId2[8] & 0x3f) | 0x80;
+
+      // Add first book
+      await program.methods
+        .addBook(bookId1, "Book 1", "Author 1", mockIpfsHash, "Fiction")
+        .accounts({
+          dolState: dolStatePda,
+          book: PublicKey.findProgramAddressSync(
+            [Buffer.from("book"), Buffer.from(bookId1)],
+            program.programId
+          )[0],
+          authority: admin.publicKey,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        } as any)
+        .signers([admin])
+        .rpc();
+
+      // Try to add second book immediately (should fail due to cooldown)
+      try {
+        await program.methods
+          .addBook(bookId2, "Book 2", "Author 2", mockIpfsHash, "Fiction")
+          .accounts({
+            dolState: dolStatePda,
+            book: PublicKey.findProgramAddressSync(
+              [Buffer.from("book"), Buffer.from(bookId2)],
+              program.programId
+            )[0],
+            authority: admin.publicKey,
+            systemProgram: anchor.web3.SystemProgram.programId,
+          } as any)
+          .signers([admin])
+          .rpc();
+
+        expect.fail("Should have failed due to rate limit");
+      } catch (error: any) {
+        expect(error.toString()).to.include("RateLimitExceeded");
+        console.log("✅ Cooldown period enforced correctly");
+      }
+    });
+
+    it("Tracks daily book addition limits", async function () {
+      if (!isInitialized) {
+        this.skip();
+        return;
+      }
+
+      const dolState = await program.account.doLState.fetch(dolStatePda);
+      console.log("Current books added today:", dolState.booksAddedToday);
+      console.log("Daily limit:", 50); // MAX_BOOKS_PER_DAY constant
+
+      // Verify the counter is working
+      expect(dolState.booksAddedToday).to.be.greaterThan(0);
+      expect(dolState.lastBookAdditionDay).to.be.greaterThan(0);
+
+      console.log("✅ Daily tracking working correctly");
+    });
+  });
+
+  // =============================================
+  // IMPROVED IPFS VALIDATION TESTS
+  // =============================================
+
+  describe("IPFS Validation Security Tests", () => {
+    it("Accepts valid CIDv0 (Qm) hash", async function () {
+      if (!isInitialized) {
+        this.skip();
+        return;
+      }
+
+      const bookId = Array.from(crypto.getRandomValues(new Uint8Array(16)));
+      bookId[6] = (bookId[6] & 0x0f) | 0x40;
+      bookId[8] = (bookId[8] & 0x3f) | 0x80;
+
+      const validCidV0 = "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG";
+
+      // Wait for cooldown period
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+
+      await program.methods
+        .addBook(bookId, "CIDv0 Test", "Test Author", validCidV0, "Tech")
+        .accounts({
+          dolState: dolStatePda,
+          book: PublicKey.findProgramAddressSync(
+            [Buffer.from("book"), Buffer.from(bookId)],
+            program.programId
+          )[0],
+          authority: admin.publicKey,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        } as any)
+        .signers([admin])
+        .rpc();
+
+      console.log("✅ Valid CIDv0 hash accepted");
+    });
+
+    it("Accepts valid CIDv1 (baf) hash with proper base32", async function () {
+      if (!isInitialized) {
+        this.skip();
+        return;
+      }
+
+      const bookId = Array.from(crypto.getRandomValues(new Uint8Array(16)));
+      bookId[6] = (bookId[6] & 0x0f) | 0x40;
+      bookId[8] = (bookId[8] & 0x3f) | 0x80;
+
+      const validCidV1 =
+        "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi";
+
+      // Wait for cooldown period
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+
+      await program.methods
+        .addBook(bookId, "CIDv1 Test", "Test Author", validCidV1, "Tech")
+        .accounts({
+          dolState: dolStatePda,
+          book: PublicKey.findProgramAddressSync(
+            [Buffer.from("book"), Buffer.from(bookId)],
+            program.programId
+          )[0],
+          authority: admin.publicKey,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        } as any)
+        .signers([admin])
+        .rpc();
+
+      console.log("✅ Valid CIDv1 hash accepted");
+    });
+
+    it("Rejects CIDv1 with invalid base32 characters", async function () {
+      if (!isInitialized) {
+        this.skip();
+        return;
+      }
+
+      const bookId = Array.from(crypto.getRandomValues(new Uint8Array(16)));
+      bookId[6] = (bookId[6] & 0x0f) | 0x40;
+      bookId[8] = (bookId[8] & 0x3f) | 0x80;
+
+      // Invalid CIDv1 with uppercase and invalid characters (8, 9)
+      const invalidCidV1 =
+        "bafybeigdyrzt5sfp7udm7hu76uh7y26NF3efuylqabf3oclgtqy89fbzdi";
+
+      try {
+        await program.methods
+          .addBook(bookId, "Invalid CIDv1", "Test Author", invalidCidV1, "Tech")
+          .accounts({
+            dolState: dolStatePda,
+            book: PublicKey.findProgramAddressSync(
+              [Buffer.from("book"), Buffer.from(bookId)],
+              program.programId
+            )[0],
+            authority: admin.publicKey,
+            systemProgram: anchor.web3.SystemProgram.programId,
+          } as any)
+          .signers([admin])
+          .rpc();
+
+        expect.fail("Should have failed with invalid base32 characters");
+      } catch (error: any) {
+        expect(error.toString()).to.include("InvalidIpfsHash");
+        console.log("✅ Invalid base32 characters rejected correctly");
+      }
+    });
+  });
+
+  // =============================================
   // SUPER ADMIN TRANSFER SECURITY TESTS
   // =============================================
 
   describe("Super Admin Transfer Security Tests", () => {
-    let superAdminKeypair: Keypair;
+    let currentSuperAdmin: Keypair;
 
     before(async function () {
       if (!isInitialized) {
@@ -437,9 +643,12 @@ describe("dol-program", () => {
         return;
       }
 
-      // Load the actual super admin keypair for testing
+      // Get the current super admin from the program state
+      const dolState = await program.account.doLState.fetch(dolStatePda);
+
+      // Try to load the keypair for the current super admin
       try {
-        superAdminKeypair = Keypair.fromSecretKey(
+        const walletKeypair = Keypair.fromSecretKey(
           new Uint8Array(
             JSON.parse(
               fs.readFileSync(
@@ -449,14 +658,36 @@ describe("dol-program", () => {
             )
           )
         );
+
+        // Check if this wallet is the current super admin
+        if (
+          dolState.superAdmin.toString() === walletKeypair.publicKey.toString()
+        ) {
+          currentSuperAdmin = walletKeypair;
+        } else if (
+          dolState.superAdmin.toString() === admin.publicKey.toString()
+        ) {
+          // If our test admin is the super admin (from initialization)
+          currentSuperAdmin = admin;
+        } else {
+          console.log("No matching super admin keypair available for tests");
+          this.skip();
+        }
       } catch (err) {
-        console.log("Could not load super admin keypair for security tests");
-        this.skip();
+        // If we can't load the wallet, check if our test admin is the super admin
+        if (dolState.superAdmin.toString() === admin.publicKey.toString()) {
+          currentSuperAdmin = admin;
+        } else {
+          console.log(
+            "Could not identify current super admin for security tests"
+          );
+          this.skip();
+        }
       }
     });
 
     it("Fails when non-super admin tries to initiate transfer", async function () {
-      if (!isInitialized || !superAdminKeypair) {
+      if (!isInitialized || !currentSuperAdmin) {
         this.skip();
         return;
       }
@@ -466,9 +697,9 @@ describe("dol-program", () => {
           .initiateSuperAdminTransfer(newSuperAdmin.publicKey)
           .accounts({
             dolState: dolStatePda,
-            authority: admin.publicKey, // Non-super admin
+            authority: user.publicKey, // Non-super admin
           } as any)
-          .signers([admin])
+          .signers([user])
           .rpc();
 
         expect.fail(
@@ -480,7 +711,7 @@ describe("dol-program", () => {
     });
 
     it("Fails to transfer to zero address", async function () {
-      if (!isInitialized || !superAdminKeypair) {
+      if (!isInitialized || !currentSuperAdmin) {
         this.skip();
         return;
       }
@@ -490,9 +721,9 @@ describe("dol-program", () => {
           .initiateSuperAdminTransfer(PublicKey.default)
           .accounts({
             dolState: dolStatePda,
-            authority: superAdminKeypair.publicKey,
+            authority: currentSuperAdmin.publicKey,
           } as any)
-          .signers([superAdminKeypair])
+          .signers([currentSuperAdmin])
           .rpc();
 
         expect.fail("Should have failed - cannot transfer to zero address");
@@ -502,19 +733,19 @@ describe("dol-program", () => {
     });
 
     it("Fails to transfer to self", async function () {
-      if (!isInitialized || !superAdminKeypair) {
+      if (!isInitialized || !currentSuperAdmin) {
         this.skip();
         return;
       }
 
       try {
         await program.methods
-          .initiateSuperAdminTransfer(superAdminKeypair.publicKey)
+          .initiateSuperAdminTransfer(currentSuperAdmin.publicKey)
           .accounts({
             dolState: dolStatePda,
-            authority: superAdminKeypair.publicKey,
+            authority: currentSuperAdmin.publicKey,
           } as any)
-          .signers([superAdminKeypair])
+          .signers([currentSuperAdmin])
           .rpc();
 
         expect.fail("Should have failed - cannot transfer to self");
@@ -524,7 +755,7 @@ describe("dol-program", () => {
     });
 
     it("Successfully initiates super admin transfer", async function () {
-      if (!isInitialized || !superAdminKeypair) {
+      if (!isInitialized || !currentSuperAdmin) {
         this.skip();
         return;
       }
@@ -533,9 +764,9 @@ describe("dol-program", () => {
         .initiateSuperAdminTransfer(newSuperAdmin.publicKey)
         .accounts({
           dolState: dolStatePda,
-          authority: superAdminKeypair.publicKey,
+          authority: currentSuperAdmin.publicKey,
         } as any)
-        .signers([superAdminKeypair])
+        .signers([currentSuperAdmin])
         .rpc();
 
       const dolState = await program.account.doLState.fetch(dolStatePda);
@@ -548,7 +779,7 @@ describe("dol-program", () => {
     });
 
     it("Fails to initiate another transfer while one is pending", async function () {
-      if (!isInitialized || !superAdminKeypair) {
+      if (!isInitialized || !currentSuperAdmin) {
         this.skip();
         return;
       }
@@ -558,9 +789,9 @@ describe("dol-program", () => {
           .initiateSuperAdminTransfer(maliciousUser.publicKey)
           .accounts({
             dolState: dolStatePda,
-            authority: superAdminKeypair.publicKey,
+            authority: currentSuperAdmin.publicKey,
           } as any)
-          .signers([superAdminKeypair])
+          .signers([currentSuperAdmin])
           .rpc();
 
         expect.fail("Should have failed - transfer already pending");
@@ -570,7 +801,7 @@ describe("dol-program", () => {
     });
 
     it("Fails to confirm transfer before timelock expires", async function () {
-      if (!isInitialized || !superAdminKeypair) {
+      if (!isInitialized || !currentSuperAdmin) {
         this.skip();
         return;
       }
@@ -580,9 +811,9 @@ describe("dol-program", () => {
           .confirmSuperAdminTransfer()
           .accounts({
             dolState: dolStatePda,
-            authority: superAdminKeypair.publicKey,
+            authority: currentSuperAdmin.publicKey,
           } as any)
-          .signers([superAdminKeypair])
+          .signers([currentSuperAdmin])
           .rpc();
 
         expect.fail("Should have failed - timelock not expired");
@@ -592,7 +823,7 @@ describe("dol-program", () => {
     });
 
     it("Successfully cancels pending transfer", async function () {
-      if (!isInitialized || !superAdminKeypair) {
+      if (!isInitialized || !currentSuperAdmin) {
         this.skip();
         return;
       }
@@ -601,9 +832,9 @@ describe("dol-program", () => {
         .cancelSuperAdminTransfer()
         .accounts({
           dolState: dolStatePda,
-          authority: superAdminKeypair.publicKey,
+          authority: currentSuperAdmin.publicKey,
         } as any)
-        .signers([superAdminKeypair])
+        .signers([currentSuperAdmin])
         .rpc();
 
       const dolState = await program.account.doLState.fetch(dolStatePda);
@@ -614,7 +845,7 @@ describe("dol-program", () => {
     });
 
     it("Fails to cancel when no transfer is pending", async function () {
-      if (!isInitialized || !superAdminKeypair) {
+      if (!isInitialized || !currentSuperAdmin) {
         this.skip();
         return;
       }
@@ -624,9 +855,9 @@ describe("dol-program", () => {
           .cancelSuperAdminTransfer()
           .accounts({
             dolState: dolStatePda,
-            authority: superAdminKeypair.publicKey,
+            authority: currentSuperAdmin.publicKey,
           } as any)
-          .signers([superAdminKeypair])
+          .signers([currentSuperAdmin])
           .rpc();
 
         expect.fail("Should have failed - no transfer pending");
@@ -641,7 +872,7 @@ describe("dol-program", () => {
   // =============================================
 
   describe("Emergency Recovery Security Tests", () => {
-    let superAdminKeypair: Keypair;
+    let currentSuperAdmin: Keypair;
     let admin2: Keypair;
 
     before(async function () {
@@ -650,9 +881,12 @@ describe("dol-program", () => {
         return;
       }
 
-      // Load the actual super admin keypair for testing
+      // Get the current super admin from the program state
+      const dolState = await program.account.doLState.fetch(dolStatePda);
+
+      // Try to identify the current super admin keypair
       try {
-        superAdminKeypair = Keypair.fromSecretKey(
+        const walletKeypair = Keypair.fromSecretKey(
           new Uint8Array(
             JSON.parse(
               fs.readFileSync(
@@ -662,6 +896,24 @@ describe("dol-program", () => {
             )
           )
         );
+
+        // Check if this wallet is the current super admin
+        if (
+          dolState.superAdmin.toString() === walletKeypair.publicKey.toString()
+        ) {
+          currentSuperAdmin = walletKeypair;
+        } else if (
+          dolState.superAdmin.toString() === admin.publicKey.toString()
+        ) {
+          // If our test admin is the super admin (from initialization)
+          currentSuperAdmin = admin;
+        } else {
+          console.log(
+            "No matching super admin keypair available for emergency recovery tests"
+          );
+          this.skip();
+          return;
+        }
 
         // Create and fund a second admin
         admin2 = Keypair.generate();
@@ -679,21 +931,48 @@ describe("dol-program", () => {
             .addAdmin(admin2.publicKey)
             .accounts({
               dolState: dolStatePda,
-              authority: superAdminKeypair.publicKey,
+              authority: currentSuperAdmin.publicKey,
             } as any)
-            .signers([superAdminKeypair])
+            .signers([currentSuperAdmin])
             .rpc();
         } catch (err) {
           console.log("Admin2 may already exist:", err);
         }
       } catch (err) {
-        console.log("Could not setup emergency recovery tests");
-        this.skip();
+        // If we can't load the wallet, check if our test admin is the super admin
+        if (dolState.superAdmin.toString() === admin.publicKey.toString()) {
+          currentSuperAdmin = admin;
+          // Still try to create admin2
+          admin2 = Keypair.generate();
+          await provider.connection.confirmTransaction(
+            await provider.connection.requestAirdrop(
+              admin2.publicKey,
+              2 * anchor.web3.LAMPORTS_PER_SOL
+            ),
+            "confirmed"
+          );
+
+          try {
+            await program.methods
+              .addAdmin(admin2.publicKey)
+              .accounts({
+                dolState: dolStatePda,
+                authority: currentSuperAdmin.publicKey,
+              } as any)
+              .signers([currentSuperAdmin])
+              .rpc();
+          } catch (err) {
+            console.log("Admin2 may already exist:", err);
+          }
+        } else {
+          console.log("Could not setup emergency recovery tests");
+          this.skip();
+        }
       }
     });
 
     it("Fails when non-admin tries to initiate emergency recovery", async function () {
-      if (!isInitialized || !superAdminKeypair) {
+      if (!isInitialized || !currentSuperAdmin) {
         this.skip();
         return;
       }
@@ -715,7 +994,7 @@ describe("dol-program", () => {
     });
 
     it("Successfully initiates emergency recovery", async function () {
-      if (!isInitialized || !superAdminKeypair) {
+      if (!isInitialized || !currentSuperAdmin) {
         this.skip();
         return;
       }
@@ -739,7 +1018,7 @@ describe("dol-program", () => {
     });
 
     it("Fails to vote twice for emergency recovery", async function () {
-      if (!isInitialized || !superAdminKeypair) {
+      if (!isInitialized || !currentSuperAdmin) {
         this.skip();
         return;
       }
@@ -761,7 +1040,7 @@ describe("dol-program", () => {
     });
 
     it("Successfully completes emergency recovery with enough votes", async function () {
-      if (!isInitialized || !superAdminKeypair || !admin2) {
+      if (!isInitialized || !currentSuperAdmin || !admin2) {
         this.skip();
         return;
       }
